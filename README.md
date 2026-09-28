@@ -25,6 +25,17 @@ agent picks. Sensitive fields are covered in the page before capture, on by defa
 npx @opendocs/cli mcp
 ```
 
+## Build from source
+
+```sh
+git clone https://github.com/opendocs-dev/opendocs && cd opendocs
+bun install
+bun run --cwd packages/cli build        # → packages/cli/dist/opendocs
+OPENDOCS_API_URL=<site>/api/v1 ./packages/cli/dist/opendocs login --key <your-key>
+```
+
+No npm package yet; `opendocs mcp` is coming.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md).
