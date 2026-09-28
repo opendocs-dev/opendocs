@@ -98,8 +98,9 @@ describe('toWebp', () => {
     fakeHeic.set([0x00, 0x00, 0x00, 0x18], 0);
     fakeHeic.set(new TextEncoder().encode('ftypheic'), 4);
 
-    await expect(toWebp(fakeHeic)).rejects.toMatchObject({
-      code: 'ERR_IMAGE_FORMAT_UNSUPPORTED',
-    });
+    // The internal error differs per OS decoder (Linux: ERR_IMAGE_FORMAT_UNSUPPORTED,
+    // macOS/Windows: "decode failed"); the user-facing line must not.
+    const result = await prepareImage('photo.heic', { readFile: async () => fakeHeic });
+    expect(result).toEqual({ ok: false, message: 'unsupported image format (PNG, JPEG, WebP)' });
   });
 });
