@@ -1,0 +1,79 @@
+name: build
+
+on:
+  push:
+    paths:
+      - 'packages/cli/**'
+      - 'packages/core/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'packages/cli/**'
+      - 'packages/core/**'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            os: ubuntu-latest
+          - target: bun-linux-arm64
+            os: ubuntu-24.04-arm
+          - target: bun-darwin-arm64
+            os: macos-latest
+          - target: bun-darwin-x64
+            os: macos-15-intel
+          - target: bun-windows-x64
+            os: windows-latest
+            ext: '.exe'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies
+        shell: bash
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        shell: bash
+        run: bun test "packages/cli/src/compress.test.ts"
+
+      - name: Compile
+        shell: bash
+        run: |
+          bun build --compile --target=${{ matrix.target }} "packages/cli/src/main.ts" \
+            --outfile "dist/opendocs-${{ matrix.target }}${{ matrix.ext }}"
+
+      - name: Check binary size is over 1 MB
+        shell: bash
+        run: |
+          binary="dist/opendocs-${{ matrix.target }}${{ matrix.ext }}"
+          size=$(wc -c < "$binary")
+          echo "$binary is $size bytes"
+          if [ "$size" -le 1048576 ]; then
+            echo "::error::$binary is only $size bytes, expected more than 1 MB"
+            exit 1
+          fi
+
+      - name: Smoke test --version
+        shell: bash
+        run: ./"dist/opendocs-${{ matrix.target }}${{ matrix.ext }}" --version
+
+      - name: Smoke test encode
+        shell: bash
+        run: |
+          ./"dist/opendocs-${{ matrix.target }}${{ matrix.ext }}" \
+            smoke-encode "packages/cli/test/fixtures/sample.png"
