@@ -265,8 +265,10 @@ export const GetDocParamsSchema = Type.Object({
 export type GetDocParams = Static<typeof GetDocParamsSchema>;
 
 export const DocStepImageSchema = Type.Object({
-  url: Type.String(),
+  url: Type.Union([Type.String(), Type.Null()]),
   expired: Type.Boolean(),
+  width: Type.Optional(Type.Number()),
+  height: Type.Optional(Type.Number()),
 });
 
 export type DocStepImage = Static<typeof DocStepImageSchema>;

@@ -10,6 +10,7 @@ import {
   CompileRunResponseSchema,
   CreateRunBodySchema,
   CreateRunResponseSchema,
+  DocStepImageSchema,
   ERROR_CODES,
   ErrorCodeSchema,
   ErrorResponseSchema,
@@ -247,10 +248,18 @@ describe('API v1 contract', () => {
           image: {
             url: 'https://i.opendocs.juniyadi.id/i/asset123',
             expired: false,
+            width: 800,
+            height: 600,
           },
         },
       ],
     };
     expect(Value.Check(GetDocResponseSchema, validDoc)).toBe(true);
+
+    const expiredImage = {
+      url: null,
+      expired: true,
+    };
+    expect(Value.Check(DocStepImageSchema, expiredImage)).toBe(true);
   });
 });
