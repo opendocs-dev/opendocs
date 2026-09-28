@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { FetchLike } from './api';
-import { createMcpServer } from './mcp';
+import { createMcpServer, type McpDeps } from './mcp';
 
 // Token-shaped value assembled at runtime: no key literal in source.
 const testKey = ['od', 'test', 'aaaabbbbcccc'].join('_');
@@ -28,8 +28,13 @@ afterEach(async () => {
 });
 
 /** Connect a fresh client/server pair over an in-memory transport. */
-async function connect(deps: { fetch?: FetchLike; readKey?: () => Promise<string | null> } = {}) {
-  const server = createMcpServer(deps);
+async function connect(deps: McpDeps = {}) {
+  const server = createMcpServer({
+    loadUserMode: async () => undefined,
+    loadAppConfig: async () => ({}),
+    cwd: () => '/tmp',
+    ...deps,
+  });
   const client = new Client({ name: 'test-client', version: '0.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
@@ -65,13 +70,14 @@ function estimatedTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-test('lists exactly 3 tools', async () => {
+test('lists exactly 4 tools', async () => {
   const client = await connect({ readKey: async () => testKey, fetch: stubFetch({}, 500) });
   const { tools } = await client.listTools();
 
-  expect(tools.length).toBe(3);
+  expect(tools.length).toBe(4);
   expect(tools.map((t) => t.name).sort()).toEqual([
     'opendocs_compile',
+    'opendocs_redaction_script',
     'opendocs_snap',
     'opendocs_step',
   ]);
@@ -99,6 +105,7 @@ test('opendocs_step response <= 50 tokens', async () => {
       instruction: 'Click the button',
       action: 'click',
       session_id: 'run_1',
+      redact: 'off',
     },
   });
 
@@ -166,6 +173,7 @@ test('first step without session_id creates a run', async () => {
       file_path: imagePath,
       instruction: 'Click the button',
       action: 'click',
+      redact: 'off',
     },
   });
 
@@ -205,7 +213,12 @@ test('stdio server answers tools/list and stays up until stdin closes', async ()
     }
   }
 
-  expect(tools).toEqual(['opendocs_snap', 'opendocs_step', 'opendocs_compile']);
+  expect(tools).toEqual([
+    'opendocs_redaction_script',
+    'opendocs_snap',
+    'opendocs_step',
+    'opendocs_compile',
+  ]);
   proc.stdin.end();
   expect(await proc.exited).toBe(0);
 }, 15000);
@@ -246,4 +259,63 @@ test('encodes session_id in the request path', async () => {
   await client.callTool({ name: 'opendocs_compile', arguments: { session_id: '../me?x=1' } });
 
   expect(urls[0]).toContain('/runs/..%2Fme%3Fx%3D1/compile');
+});
+
+test('step without a report in strict mode is refused before any upload', async () => {
+  let calls = 0;
+  const fetchImpl: FetchLike = async () => {
+    calls += 1;
+    return new Response('{}', { status: 500 });
+  };
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+    },
+  });
+
+  const content = result.content as Array<{ type: string; text: string }>;
+  expect(result.isError).toBe(true);
+  expect(content[0]!.text).toContain('redact: "strict"');
+  expect(calls).toBe(0);
+});
+
+test('step forwards the report and mode', async () => {
+  let sentBody: unknown;
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'basic',
+      redaction_report: { count: 2, script_version: '1' },
+    },
+  });
+
+  expect(sentBody).toMatchObject({
+    redaction: { mode: 'basic', report: { count: 2, script_version: '1' } },
+  });
 });
