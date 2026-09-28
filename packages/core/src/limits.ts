@@ -12,15 +12,11 @@ export const MAX_PIXELS = 50000000 as const;
 /** Max steps allowed per Run for Free workspaces */
 export const FREE_STEPS_PER_RUN = 15 as const;
 
-/** Alias for FREE_STEPS_PER_RUN */
-export const FREE_STEP_LIMIT = FREE_STEPS_PER_RUN;
-
 /** Snap TTL options */
 export const SNAP_TTL_VALUES = ['15m', '1h', '24h'] as const;
 export type SnapTtl = (typeof SNAP_TTL_VALUES)[number];
 
 export const SNAP_TTL = {
-  options: SNAP_TTL_VALUES,
   values: SNAP_TTL_VALUES,
   default: '24h' as const,
   seconds: {
@@ -29,8 +25,6 @@ export const SNAP_TTL = {
     '24h': 24 * 60 * 60,
   } as const,
 } as const;
-
-export const SNAP_TTL_DEFAULT = SNAP_TTL.default;
 
 /** Free workspace doc image retention in days */
 export const FREE_DOC_IMAGE_DAYS = 30 as const;
@@ -54,13 +48,13 @@ export const DAILY_QUOTAS = {
 export type Plan = keyof typeof DAILY_QUOTAS;
 
 /** Global upload circuit breaker: 50 GB / day */
-export const GLOBAL_BREAKER_BYTES = 50 * 1024 * 1024 * 1024 as const; // 53_687_091_200 bytes
+export const GLOBAL_BREAKER_BYTES = 50 * 1024 * 1024 * 1024; // 53_687_091_200 bytes
 
 /** Alert threshold ratio for global circuit breaker (80%) */
 export const GLOBAL_BREAKER_ALERT_RATIO = 0.8 as const;
 
 /** Alert threshold in bytes: 40 GB (80% of 50 GB) */
-export const GLOBAL_BREAKER_ALERT_BYTES = 40 * 1024 * 1024 * 1024 as const; // 42_949_672_960 bytes
+export const GLOBAL_BREAKER_ALERT_BYTES = 40 * 1024 * 1024 * 1024; // 42_949_672_960 bytes
 
 /** Base62 public identifier length (16 chars, 96 bits) */
 export const PUBLIC_ID_LENGTH = 16 as const;
