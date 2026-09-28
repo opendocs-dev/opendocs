@@ -13,6 +13,7 @@ import { SNAP_TTL_VALUES, type SnapTtl } from '@opendocs/core/limits';
 import type { ApiFailureKind, FetchLike } from './api';
 import { addStep, compileRun, createRun } from './api';
 import { readCredentials } from './config';
+import { maskStepText } from './pii';
 import { loadAppConfig, loadUserMode, requireReport, resolveMode, type RedactMode } from './redact/enforce';
 import { buildRedactionScript } from './redact/script';
 import { uploadImage } from './upload';
@@ -331,9 +332,12 @@ async function handleStep(
     return textResult(error instanceof Error ? error.message : String(error), true);
   }
 
+  const maskedInstruction = maskStepText(parsed.instruction);
+
   let sessionId = parsed.session_id;
   if (!sessionId) {
-    const run = await createRun(key, parsed.title, fetchImpl);
+    const maskedTitle = parsed.title !== undefined ? maskStepText(parsed.title).text : undefined;
+    const run = await createRun(key, maskedTitle, fetchImpl);
     if (!run.ok) return textResult(mapApiError(run), true);
     sessionId = run.data.session_id;
   }
@@ -344,7 +348,7 @@ async function handleStep(
   const body: AddStepBody = {
     asset_id: uploaded.data.id,
     action: parsed.action,
-    instruction: parsed.instruction,
+    instruction: maskedInstruction.text,
     selector: parsed.selector,
     box: parsed.box,
     page_url: parsed.page_url,
@@ -354,7 +358,8 @@ async function handleStep(
   const step = await addStep(key, sessionId, body, fetchImpl);
   if (!step.ok) return textResult(mapApiError(step), true);
 
-  return textResult(`session_id=${sessionId} step=${step.data.order}`);
+  const maskedNote = maskedInstruction.count > 0 ? ` masked=${maskedInstruction.count}` : '';
+  return textResult(`session_id=${sessionId} step=${step.data.order}${maskedNote}`);
 }
 
 async function handleCompile(
@@ -368,7 +373,9 @@ async function handleCompile(
   const key = await readKey();
   if (!key) return textResult(NOT_LOGGED_IN, true);
 
-  const compiled = await compileRun(key, parsed.session_id, parsed.title, fetchImpl);
+  // The title becomes the public doc title, so it is masked like step text.
+  const title = parsed.title !== undefined ? maskStepText(parsed.title).text : undefined;
+  const compiled = await compileRun(key, parsed.session_id, title, fetchImpl);
   if (!compiled.ok) return textResult(mapApiError(compiled), true);
 
   return textResult(compiled.data.url);
