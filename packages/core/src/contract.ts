@@ -12,6 +12,7 @@ export const V1_ROUTES = [
   'POST /api/v1/runs/{id}/compile',
   'GET /api/v1/flows',
   'GET /api/v1/docs/{publicId}',
+  'GET /api/v1/docs/{publicId}/markdown',
 ] as const;
 
 export type V1Route = (typeof V1_ROUTES)[number];
@@ -348,5 +349,11 @@ export const V1_ROUTE_SCHEMAS = {
     path: '/api/v1/docs/{publicId}',
     params: GetDocParamsSchema,
     response: GetDocResponseSchema,
+  },
+  // Markdown body, not JSON, so this route has no response schema.
+  'GET /api/v1/docs/{publicId}/markdown': {
+    method: 'GET',
+    path: '/api/v1/docs/{publicId}/markdown',
+    params: GetDocParamsSchema,
   },
 } as const;
