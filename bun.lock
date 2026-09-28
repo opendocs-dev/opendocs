@@ -1,0 +1,25 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "opendocs",
+    },
+    "packages/cli": {
+      "name": "@opendocs/cli",
+      "version": "0.0.0",
+      "dependencies": {
+        "@opendocs/core": "workspace:*",
+      },
+    },
+    "packages/core": {
+      "name": "@opendocs/core",
+      "version": "0.0.0",
+    },
+  },
+  "packages": {
+    "@opendocs/cli": ["@opendocs/cli@workspace:packages/cli"],
+
+    "@opendocs/core": ["@opendocs/core@workspace:packages/core"],
+  }
+}
