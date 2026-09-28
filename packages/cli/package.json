@@ -9,6 +9,7 @@
     "build": "bun build --compile ./src/main.ts --outfile dist/opendocs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@opendocs/core": "workspace:*"
   },
   "devDependencies": {
