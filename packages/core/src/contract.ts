@@ -11,6 +11,7 @@ export const V1_ROUTES = [
   'POST /api/v1/runs/{id}/steps',
   'POST /api/v1/runs/{id}/compile',
   'GET /api/v1/flows',
+  'DELETE /api/v1/flows/{publicId}',
   'GET /api/v1/docs/{publicId}',
   'GET /api/v1/docs/{publicId}/markdown',
 ] as const;
@@ -262,7 +263,17 @@ export const ListFlowsResponseSchema = Type.Object({
 export type ListFlowsResponse = Static<typeof ListFlowsResponseSchema>;
 
 // ==========================================
-// 8. GET /api/v1/docs/{publicId}
+// 8. DELETE /api/v1/flows/{publicId}
+// ==========================================
+
+export const DeleteFlowParamsSchema = Type.Object({
+  publicId: Type.String(),
+});
+
+export type DeleteFlowParams = Static<typeof DeleteFlowParamsSchema>;
+
+// ==========================================
+// 9. GET /api/v1/docs/{publicId}
 // ==========================================
 
 export const GetDocParamsSchema = Type.Object({
@@ -349,6 +360,11 @@ export const V1_ROUTE_SCHEMAS = {
     path: '/api/v1/flows',
     query: ListFlowsQuerySchema,
     response: ListFlowsResponseSchema,
+  },
+  'DELETE /api/v1/flows/{publicId}': {
+    method: 'DELETE',
+    path: '/api/v1/flows/{publicId}',
+    params: DeleteFlowParamsSchema,
   },
   'GET /api/v1/docs/{publicId}': {
     method: 'GET',
