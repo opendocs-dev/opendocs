@@ -10,6 +10,7 @@ import {
   CompileRunResponseSchema,
   CreateRunBodySchema,
   CreateRunResponseSchema,
+  DeleteFlowParamsSchema,
   DocStepImageSchema,
   ERROR_CODES,
   ErrorCodeSchema,
@@ -26,7 +27,7 @@ import {
 
 describe('API v1 contract', () => {
   test('exports a schema for every v1 route', () => {
-    expect(V1_ROUTES).toHaveLength(9);
+    expect(V1_ROUTES).toHaveLength(10);
 
     const expectedRoutes = [
       'GET /api/healthz',
@@ -36,11 +37,16 @@ describe('API v1 contract', () => {
       'POST /api/v1/runs/{id}/steps',
       'POST /api/v1/runs/{id}/compile',
       'GET /api/v1/flows',
+      'DELETE /api/v1/flows/{publicId}',
       'GET /api/v1/docs/{publicId}',
       'GET /api/v1/docs/{publicId}/markdown',
     ];
     // The markdown route returns a text/markdown body, not JSON, so it has no response schema.
-    const routesWithoutResponseSchema = ['GET /api/v1/docs/{publicId}/markdown'];
+    // DELETE /flows/{publicId} returns 204 No Content, so it has no response schema either.
+    const routesWithoutResponseSchema = [
+      'GET /api/v1/docs/{publicId}/markdown',
+      'DELETE /api/v1/flows/{publicId}',
+    ];
 
     for (const route of expectedRoutes) {
       expect(V1_ROUTES).toContain(route as any);
@@ -238,6 +244,10 @@ describe('API v1 contract', () => {
       next_cursor: null,
     };
     expect(Value.Check(ListFlowsResponseSchema, validResponse)).toBe(true);
+  });
+
+  test('validates DELETE /api/v1/flows/{publicId} params', () => {
+    expect(Value.Check(DeleteFlowParamsSchema, { publicId: 'flow123456789012' })).toBe(true);
   });
 
   test('validates GET /api/v1/docs/{publicId} params and response', () => {
