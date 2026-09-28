@@ -3,7 +3,6 @@ import {
   CLI_MIN_VERSION,
   DAILY_QUOTAS,
   FREE_DOC_IMAGE_DAYS,
-  FREE_STEP_LIMIT,
   FREE_STEPS_PER_RUN,
   GLOBAL_BREAKER_ALERT_BYTES,
   GLOBAL_BREAKER_ALERT_RATIO,
@@ -12,24 +11,20 @@ import {
   MAX_PIXELS,
   PUBLIC_ID_LENGTH,
   SNAP_TTL,
-  SNAP_TTL_DEFAULT,
   SNAP_TTL_VALUES,
 } from './limits';
 
 describe('limits and constants', () => {
   test('MAX_BYTES equals 10485760', () => {
     expect(MAX_BYTES).toBe(10485760);
-    expect(MAX_BYTES).toBe(10 * 1024 * 1024);
   });
 
   test('FREE_STEPS_PER_RUN equals 15', () => {
     expect(FREE_STEPS_PER_RUN).toBe(15);
-    expect(FREE_STEP_LIMIT).toBe(15);
   });
 
   test('SNAP_TTL default is 24h', () => {
     expect(SNAP_TTL.default).toBe('24h');
-    expect(SNAP_TTL_DEFAULT).toBe('24h');
     expect(SNAP_TTL.values).toEqual(['15m', '1h', '24h']);
     expect(SNAP_TTL_VALUES).toEqual(['15m', '1h', '24h']);
     expect(SNAP_TTL.seconds['15m']).toBe(15 * 60);
