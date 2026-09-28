@@ -182,6 +182,75 @@ test('first step without session_id creates a run', async () => {
   expect(content[0]!.text).toBe('session_id=run_new step=1');
 });
 
+test('response notes masked count when PII found', async () => {
+  let sentBody: unknown;
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Email jane.doe@example.com the receipt',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+
+  const content = result.content as Array<{ type: string; text: string }>;
+  expect((sentBody as { instruction: string }).instruction).toContain('[email]');
+  expect((sentBody as { instruction: string }).instruction).not.toContain('jane.doe@example.com');
+  expect(content[0]!.text).toBe('session_id=run_1 step=1 masked=1');
+});
+
+test('response omits the note when none found', async () => {
+  let sentBody: unknown;
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the blue submit button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+
+  const content = result.content as Array<{ type: string; text: string }>;
+  expect((sentBody as { instruction: string }).instruction).toBe('Click the blue submit button');
+  expect(content[0]!.text).toBe('session_id=run_1 step=1');
+});
+
 test('stdio server answers tools/list and stays up until stdin closes', async () => {
   const proc = Bun.spawn(['bun', `${import.meta.dir}/main.ts`, 'mcp'], {
     stdin: 'pipe',
@@ -318,4 +387,19 @@ test('step forwards the report and mode', async () => {
   expect(sentBody).toMatchObject({
     redaction: { mode: 'basic', report: { count: 2, script_version: '1' } },
   });
+});
+
+test("compile masks PII in the doc title", async () => {
+  const bodies: string[] = [];
+  const fetchImpl: FetchLike = async (_url, init) => {
+    bodies.push(String((init as { body?: unknown } | undefined)?.body ?? ""));
+    return new Response(JSON.stringify({ url: "https://x/d/1" }), { status: 200 });
+  };
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const email = ["someone", "example.com"].join("@");
+
+  await client.callTool({ name: "opendocs_compile", arguments: { session_id: "run_1", title: `Guide for ${email}` } });
+
+  expect(bodies.join("")).toContain("[email]");
+  expect(bodies.join("")).not.toContain(email);
 });
