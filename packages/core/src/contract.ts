@@ -163,14 +163,20 @@ export const RedactionReportSchema = Type.Object({
 
 export type RedactionReport = Static<typeof RedactionReportSchema>;
 
-export const RedactionConfigSchema = Type.Object({
-  mode: Type.Union([
-    Type.Literal('strict'),
-    Type.Literal('basic'),
-    Type.Literal('off'),
-  ]),
-  report: Type.Optional(RedactionReportSchema),
-});
+export const RedactionConfigSchema = Type.Object(
+  {
+    mode: Type.Union([
+      Type.Literal('strict'),
+      Type.Literal('basic'),
+      Type.Literal('off'),
+    ]),
+    report: Type.Optional(RedactionReportSchema),
+  },
+  {
+    description:
+      'report is required unless mode is "off"; the API rejects a missing report with redaction_report_missing rather than the schema enforcing it structurally.',
+  },
+);
 
 export type RedactionConfig = Static<typeof RedactionConfigSchema>;
 
