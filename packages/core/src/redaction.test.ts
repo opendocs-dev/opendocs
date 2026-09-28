@@ -103,11 +103,14 @@ describe('redaction patterns and masking', () => {
     expect(isLuhnValid('123456789012345678901')).toBe(false); // too long
   });
 
-  test('exports REDACTION_PATTERNS object', () => {
-    expect(REDACTION_PATTERNS.email).toBeDefined();
-    expect(REDACTION_PATTERNS.phoneId).toBeDefined();
-    expect(REDACTION_PATTERNS.nik).toBeDefined();
-    expect(REDACTION_PATTERNS.npwp).toBeDefined();
-    expect(REDACTION_PATTERNS.token).toBeDefined();
+  test('exports non-global patterns and masks repeated matches', () => {
+    for (const pattern of Object.values(REDACTION_PATTERNS)) {
+      expect(pattern.global).toBe(false);
+    }
+    expect(REDACTION_PATTERNS.email.test('user@example.com')).toBe(true);
+    expect(REDACTION_PATTERNS.email.test('user@example.com')).toBe(true);
+    expect(maskText('user@example.com and admin@example.com')).toBe(
+      '[email] and [email]'
+    );
   });
 });
