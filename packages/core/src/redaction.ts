@@ -33,30 +33,29 @@ export function isLuhnValid(value: string): boolean {
 }
 
 /** Email pattern */
-export const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+export const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
 
 /** Indonesian phone number pattern (+62, 62, or 08 prefix) */
-export const PHONE_ID_PATTERN = /(?:\+62|62|08)[0-9\s-]{7,13}[0-9]\b/g;
+export const PHONE_ID_PATTERN = /(?:\+62|62|08)[0-9\s-]{7,13}[0-9]\b/;
 
 /** Card candidate pattern (13-19 digits, with optional spaces or dashes) */
-export const CARD_CANDIDATE_PATTERN = /\b(?:\d[ -]*?){13,19}\b/g;
+export const CARD_CANDIDATE_PATTERN = /\b(?:\d[ -]*?){13,19}\b/;
 
 /** Indonesian NIK (Nomor Induk Kependudukan, exactly 16 digits) */
-export const NIK_PATTERN = /\b\d{16}\b/g;
+export const NIK_PATTERN = /\b\d{16}\b/;
 
 /** Indonesian NPWP (formatted 15 digits or unformatted 15 digits) */
-export const NPWP_PATTERN = /(?:\b\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}\b|\b\d{15}\b)/g;
+export const NPWP_PATTERN = /(?:\b\d{2}\.\d{3}\.\d{3}\.\d{1}-\d{3}\.\d{3}\b|\b\d{15}\b)/;
 
 /** Token patterns: OpenAI/Stripe sk_, GitHub ghp_, AWS AKIA, and JWT eyJ... */
-export const TOKEN_SK_PATTERN = /\bsk_(?:live|test)_[A-Za-z0-9_-]+\b|\bsk_[A-Za-z0-9_-]{16,}\b/g;
-export const TOKEN_GHP_PATTERN = /\bghp_[A-Za-z0-9]{20,}\b/g;
-export const TOKEN_AKIA_PATTERN = /\bAKIA[0-9A-Z]{16}\b/g;
-export const TOKEN_JWT_PATTERN = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
+export const TOKEN_SK_PATTERN = /\bsk_(?:live|test)_[A-Za-z0-9_-]+\b|\bsk_[A-Za-z0-9_-]{16,}\b/;
+export const TOKEN_GHP_PATTERN = /\bghp_[A-Za-z0-9]{20,}\b/;
+export const TOKEN_AKIA_PATTERN = /\bAKIA[0-9A-Z]{16}\b/;
+export const TOKEN_JWT_PATTERN = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/;
 
 /** Composite token pattern matching any supported token / secret */
 export const TOKEN_PATTERN = new RegExp(
   `${TOKEN_SK_PATTERN.source}|${TOKEN_GHP_PATTERN.source}|${TOKEN_AKIA_PATTERN.source}|${TOKEN_JWT_PATTERN.source}`,
-  'g'
 );
 
 export interface MaskResult {
@@ -78,6 +77,7 @@ export function maskTextWithDetails(input: string): MaskResult {
   let result = input;
   let count = 0;
   const tags: string[] = [];
+  const globalPattern = (pattern: RegExp) => new RegExp(pattern.source, 'g');
 
   const recordMask = (tag: string) => {
     count++;
@@ -87,32 +87,32 @@ export function maskTextWithDetails(input: string): MaskResult {
   };
 
   // 1. Tokens
-  result = result.replace(TOKEN_SK_PATTERN, () => {
+  result = result.replace(globalPattern(TOKEN_SK_PATTERN), () => {
     recordMask('[token]');
     return '[token]';
   });
-  result = result.replace(TOKEN_GHP_PATTERN, () => {
+  result = result.replace(globalPattern(TOKEN_GHP_PATTERN), () => {
     recordMask('[token]');
     return '[token]';
   });
-  result = result.replace(TOKEN_AKIA_PATTERN, () => {
+  result = result.replace(globalPattern(TOKEN_AKIA_PATTERN), () => {
     recordMask('[token]');
     return '[token]';
   });
-  result = result.replace(TOKEN_JWT_PATTERN, () => {
+  result = result.replace(globalPattern(TOKEN_JWT_PATTERN), () => {
     recordMask('[token]');
     return '[token]';
   });
 
   // 2. Email
-  result = result.replace(EMAIL_PATTERN, () => {
+  result = result.replace(globalPattern(EMAIL_PATTERN), () => {
     recordMask('[email]');
     return '[email]';
   });
 
   // 3. Card numbers (Luhn checked)
   // Must run BEFORE NIK so a 16-digit card is masked as [card]
-  result = result.replace(CARD_CANDIDATE_PATTERN, (match) => {
+  result = result.replace(globalPattern(CARD_CANDIDATE_PATTERN), (match) => {
     const rawDigits = match.replace(/\D/g, '');
     if (rawDigits.length >= 13 && rawDigits.length <= 19 && isLuhnValid(rawDigits)) {
       recordMask('[card]');
@@ -122,19 +122,19 @@ export function maskTextWithDetails(input: string): MaskResult {
   });
 
   // 4. NIK (16 contiguous digits)
-  result = result.replace(NIK_PATTERN, () => {
+  result = result.replace(globalPattern(NIK_PATTERN), () => {
     recordMask('[nik]');
     return '[nik]';
   });
 
   // 5. NPWP
-  result = result.replace(NPWP_PATTERN, () => {
+  result = result.replace(globalPattern(NPWP_PATTERN), () => {
     recordMask('[npwp]');
     return '[npwp]';
   });
 
   // 6. Indonesian phone
-  result = result.replace(PHONE_ID_PATTERN, (match) => {
+  result = result.replace(globalPattern(PHONE_ID_PATTERN), (match) => {
     const digitsOnly = match.replace(/\D/g, '');
     if (digitsOnly.length >= 9 && digitsOnly.length <= 14) {
       recordMask('[phone]');
