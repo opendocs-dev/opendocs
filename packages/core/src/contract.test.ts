@@ -26,7 +26,7 @@ import {
 
 describe('API v1 contract', () => {
   test('exports a schema for every v1 route', () => {
-    expect(V1_ROUTES).toHaveLength(8);
+    expect(V1_ROUTES).toHaveLength(9);
 
     const expectedRoutes = [
       'GET /api/healthz',
@@ -37,14 +37,19 @@ describe('API v1 contract', () => {
       'POST /api/v1/runs/{id}/compile',
       'GET /api/v1/flows',
       'GET /api/v1/docs/{publicId}',
+      'GET /api/v1/docs/{publicId}/markdown',
     ];
+    // The markdown route returns a text/markdown body, not JSON, so it has no response schema.
+    const routesWithoutResponseSchema = ['GET /api/v1/docs/{publicId}/markdown'];
 
     for (const route of expectedRoutes) {
       expect(V1_ROUTES).toContain(route as any);
       expect(V1_ROUTE_SCHEMAS).toHaveProperty(route);
       const entry = (V1_ROUTE_SCHEMAS as any)[route];
       expect(entry).toBeDefined();
-      expect(entry.response).toBeDefined();
+      if (!routesWithoutResponseSchema.includes(route)) {
+        expect(entry.response).toBeDefined();
+      }
       expect(entry.method).toBeDefined();
       expect(entry.path).toBeDefined();
     }
@@ -53,8 +58,11 @@ describe('API v1 contract', () => {
   test('schemas are TypeBox instances with request/response shapes', () => {
     for (const route of V1_ROUTES) {
       const entry = (V1_ROUTE_SCHEMAS as any)[route];
-      // Every route must define a valid TypeBox response schema
-      expect(Value.Check(entry.response, {})).toBeBoolean();
+      // Every route must define a valid TypeBox response schema, except the
+      // markdown doc route which returns a text/markdown body, not JSON.
+      if (entry.response) {
+        expect(Value.Check(entry.response, {})).toBeBoolean();
+      }
 
       if (entry.body) {
         expect(Value.Check(entry.body, {})).toBeBoolean();
