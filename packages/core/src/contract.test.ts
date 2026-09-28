@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { TypeBox } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import {
   AddStepBodySchema,
