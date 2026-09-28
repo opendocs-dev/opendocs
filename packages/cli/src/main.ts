@@ -6,12 +6,14 @@ import pkg from '../package.json' with { type: 'json' };
 import { login } from './commands/login';
 import { logout } from './commands/logout';
 import { toWebp } from './compress';
+import { startMcp } from './mcp';
 
 const USAGE = `opendocs ${pkg.version}
 
 Usage:
   opendocs login --key <key>   Save an API key for this machine
   opendocs logout              Remove the stored API key
+  opendocs mcp                 Start the MCP server (stdio)
   opendocs --version           Print the CLI version`;
 
 /** Hidden command used by CI to smoke-test each compiled binary. */
@@ -44,6 +46,9 @@ async function main(argv: string[]): Promise<number> {
       return await login(rest);
     case 'logout':
       return await logout(rest);
+    case 'mcp':
+      await startMcp();
+      return 0;
     case 'smoke-encode':
       return await smokeEncode(rest[0]);
     default:

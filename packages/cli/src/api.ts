@@ -4,7 +4,16 @@
  * Every call returns a discriminated result instead of throwing, so commands can
  * map a failure to one user-facing line without a try/catch around each call.
  */
-import type { ErrorResponse, MeResponse } from '@opendocs/core/contract';
+import type {
+  AddStepBody,
+  AddStepResponse,
+  AssetUploadResponse,
+  CompileRunResponse,
+  CreateRunResponse,
+  ErrorResponse,
+  MeResponse,
+} from '@opendocs/core/contract';
+import type { SnapTtl } from '@opendocs/core/limits';
 import pkg from '../package.json' with { type: 'json' };
 
 const DEFAULT_API_URL = 'https://opendocs.juniyadi.id/api/v1';
@@ -16,11 +25,19 @@ export type ApiResult<T> =
   | { ok: true; me: T }
   | { ok: false; kind: ApiFailureKind; message: string };
 
+/** Discriminated result for the run/asset calls below: never throws. */
+export type ApiCallResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; kind: ApiFailureKind; message: string };
+
 /** The minimal `fetch` shape this module needs, so tests can pass a stub. */
 export type FetchLike = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string> }
+  init?: { method?: string; headers?: Record<string, string>; body?: BodyInit }
 ) => Promise<Response>;
+
+/** Asset kind, as sent in the `x-opendocs-kind` header. */
+export type AssetKind = 'step' | 'snap';
 
 /**
  * The API base URL, without a trailing slash.
@@ -104,4 +121,176 @@ export async function getMe(
     kind: 'error',
     message: message ?? `request failed with status ${response.status}`,
   };
+}
+
+/** Run `fetchImpl`, turning a thrown network error into a result instead of a throw. */
+async function safeFetch(
+  fetchImpl: FetchLike,
+  url: string,
+  init: { method: string; headers?: Record<string, string>; body?: BodyInit }
+): Promise<Response | { ok: false; kind: 'network'; message: string }> {
+  try {
+    return await fetchImpl(url, init);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, kind: 'network', message: `cannot reach ${apiBaseUrl()}: ${message}` };
+  }
+}
+
+/** Map a completed response to a result: 401/403 → unauthorized, else API message or status text. */
+async function handleApiResponse<T>(response: Response): Promise<ApiCallResult<T>> {
+  if (response.ok) {
+    try {
+      return { ok: true, data: (await response.json()) as T };
+    } catch {
+      return { ok: false, kind: 'error', message: 'malformed response from the API' };
+    }
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    const message = await errorMessage(response);
+    return { ok: false, kind: 'unauthorized', message: message ?? 'unauthorized' };
+  }
+
+  const message = await errorMessage(response);
+  return { ok: false, kind: 'error', message: message ?? response.statusText };
+}
+
+/** Sniff an image's content-type from its magic bytes; the API rejects anything else. */
+function sniffImageContentType(bytes: Uint8Array): string {
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return 'image/png';
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  return 'application/octet-stream';
+}
+
+/**
+ * Upload an image asset: `POST /assets`.
+ *
+ * @param key API key.
+ * @param bytes Image bytes; content-type is sniffed from the magic bytes.
+ * @param kind `step` (attached to a run step) or `snap` (short-lived, has a TTL).
+ * @param ttl TTL for a `snap` upload; ignored for `step`.
+ * @param fetchImpl Injectable `fetch`.
+ */
+export async function uploadAsset(
+  key: string,
+  bytes: Uint8Array,
+  kind: AssetKind,
+  ttl?: SnapTtl,
+  fetchImpl: FetchLike = fetch
+): Promise<ApiCallResult<AssetUploadResponse>> {
+  const headers: Record<string, string> = {
+    'content-type': sniffImageContentType(bytes),
+    'content-length': String(bytes.length),
+    'x-opendocs-kind': kind,
+    'x-api-key': key,
+    'x-opendocs-cli-version': pkg.version,
+  };
+  if (kind === 'snap' && ttl) {
+    headers['x-opendocs-ttl'] = ttl;
+  }
+
+  const response = await safeFetch(fetchImpl, `${apiBaseUrl()}/assets`, {
+    method: 'POST',
+    headers,
+    body: bytes as BodyInit,
+  });
+  if (!(response instanceof Response)) return response;
+  return handleApiResponse<AssetUploadResponse>(response);
+}
+
+/**
+ * Start a new run: `POST /runs`.
+ *
+ * @param key API key.
+ * @param title Optional run title.
+ * @param fetchImpl Injectable `fetch`.
+ */
+export async function createRun(
+  key: string,
+  title?: string,
+  fetchImpl: FetchLike = fetch
+): Promise<ApiCallResult<CreateRunResponse>> {
+  const response = await safeFetch(fetchImpl, `${apiBaseUrl()}/runs`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': key,
+      'x-opendocs-cli-version': pkg.version,
+    },
+    body: JSON.stringify(title ? { title } : {}),
+  });
+  if (!(response instanceof Response)) return response;
+  return handleApiResponse<CreateRunResponse>(response);
+}
+
+/**
+ * Add a step to a run: `POST /runs/{id}/steps`.
+ *
+ * @param key API key.
+ * @param sessionId The run's session id.
+ * @param body The step payload.
+ * @param fetchImpl Injectable `fetch`.
+ */
+export async function addStep(
+  key: string,
+  sessionId: string,
+  body: AddStepBody,
+  fetchImpl: FetchLike = fetch
+): Promise<ApiCallResult<AddStepResponse>> {
+  const response = await safeFetch(fetchImpl, `${apiBaseUrl()}/runs/${encodeURIComponent(sessionId)}/steps`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': key,
+      'x-opendocs-cli-version': pkg.version,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!(response instanceof Response)) return response;
+  return handleApiResponse<AddStepResponse>(response);
+}
+
+/**
+ * Compile a run into a doc: `POST /runs/{id}/compile`.
+ *
+ * @param key API key.
+ * @param sessionId The run's session id.
+ * @param title Optional doc title.
+ * @param fetchImpl Injectable `fetch`.
+ */
+export async function compileRun(
+  key: string,
+  sessionId: string,
+  title?: string,
+  fetchImpl: FetchLike = fetch
+): Promise<ApiCallResult<CompileRunResponse>> {
+  const response = await safeFetch(fetchImpl, `${apiBaseUrl()}/runs/${encodeURIComponent(sessionId)}/compile`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': key,
+      'x-opendocs-cli-version': pkg.version,
+    },
+    body: JSON.stringify(title ? { title } : {}),
+  });
+  if (!(response instanceof Response)) return response;
+  return handleApiResponse<CompileRunResponse>(response);
 }
