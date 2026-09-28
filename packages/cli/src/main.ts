@@ -7,14 +7,31 @@ import { login } from './commands/login';
 import { logout } from './commands/logout';
 import { toWebp } from './compress';
 import { startMcp } from './mcp';
+import { REDACT_MODES, saveUserMode } from './redact/enforce';
 
 const USAGE = `opendocs ${pkg.version}
 
 Usage:
-  opendocs login --key <key>   Save an API key for this machine
-  opendocs logout              Remove the stored API key
-  opendocs mcp                 Start the MCP server (stdio)
-  opendocs --version           Print the CLI version`;
+  opendocs login --key <key>          Save an API key for this machine
+  opendocs logout                     Remove the stored API key
+  opendocs config redact <mode>       Save the default redaction mode (strict, basic, off)
+  opendocs mcp                        Start the MCP server (stdio)
+  opendocs --version                  Print the CLI version`;
+
+/** `opendocs config redact <strict|basic|off>` */
+async function configRedact(mode: string | undefined): Promise<number> {
+  if (!mode) {
+    process.stderr.write('usage: opendocs config redact <strict|basic|off>\n');
+    return 1;
+  }
+  if (!(REDACT_MODES as readonly string[]).includes(mode)) {
+    process.stderr.write(`unknown redact mode "${mode}": use strict, basic or off\n`);
+    return 1;
+  }
+  await saveUserMode(mode as (typeof REDACT_MODES)[number]);
+  process.stdout.write(`redact mode set to ${mode}\n`);
+  return 0;
+}
 
 /** Hidden command used by CI to smoke-test each compiled binary. */
 async function smokeEncode(path: string | undefined): Promise<number> {
@@ -46,6 +63,10 @@ async function main(argv: string[]): Promise<number> {
       return await login(rest);
     case 'logout':
       return await logout(rest);
+    case 'config':
+      if (rest[0] === 'redact') return await configRedact(rest[1]);
+      process.stdout.write(`${USAGE}\n`);
+      return 1;
     case 'mcp':
       await startMcp();
       return 0;
