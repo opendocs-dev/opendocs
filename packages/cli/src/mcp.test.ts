@@ -70,6 +70,58 @@ function estimatedTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/** Build WebP bytes of the given pixel size from the PNG fixture, for target-box math tests. */
+async function resizedWebp(width: number, height: number): Promise<Uint8Array> {
+  const fixture = new URL('../test/fixtures/sample.png', import.meta.url);
+  const input = await Bun.file(fixture).bytes();
+  return await new Bun.Image(input).resize(width, height, { fit: 'fill' }).webp({ quality: 80 }).bytes();
+}
+
+/** Recursively collect every JSON-schema `properties` entry missing a `description`. */
+function propertiesMissingDescription(schema: unknown, path: string, out: string[]): void {
+  if (typeof schema !== 'object' || schema === null) return;
+  const s = schema as Record<string, unknown>;
+  const properties = s.properties as Record<string, unknown> | undefined;
+  if (!properties) return;
+  for (const [key, value] of Object.entries(properties)) {
+    const propPath = `${path}.${key}`;
+    if (typeof value !== 'object' || value === null || !('description' in value)) {
+      out.push(propPath);
+    }
+    propertiesMissingDescription(value, propPath, out);
+    const items = (value as Record<string, unknown> | undefined)?.items;
+    if (items) propertiesMissingDescription(items, `${propPath}[]`, out);
+  }
+}
+
+test('instructions are sent on initialize', async () => {
+  const server = createMcpServer({
+    loadUserMode: async () => undefined,
+    loadAppConfig: async () => ({}),
+    cwd: () => '/tmp',
+  });
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  const instructions = client.getInstructions();
+  expect(instructions).toBeDefined();
+  expect(instructions!.length).toBeGreaterThan(0);
+  expect(instructions!.length).toBeLessThanOrEqual(1800);
+  expect(instructions).toContain('opendocs_compile');
+});
+
+test('every input property of every tool has a description', async () => {
+  const client = await connect({ readKey: async () => testKey, fetch: stubFetch({}, 500) });
+  const { tools } = await client.listTools();
+
+  const missing: string[] = [];
+  for (const tool of tools) {
+    propertiesMissingDescription(tool.inputSchema, tool.name, missing);
+  }
+  expect(missing).toEqual([]);
+});
+
 test('lists exactly 4 tools', async () => {
   const client = await connect({ readKey: async () => testKey, fetch: stubFetch({}, 500) });
   const { tools } = await client.listTools();
@@ -179,7 +231,9 @@ test('first step without session_id creates a run', async () => {
 
   const content = result.content as Array<{ type: string; text: string }>;
   expect(sawCreateRun).toBe(true);
-  expect(content[0]!.text).toBe('session_id=run_new step=1');
+  expect(content[0]!.text).toBe(
+    'step 1 recorded, session_id=run_new. Next: next step, or opendocs_compile when done.'
+  );
 });
 
 test('response notes masked count when PII found', async () => {
@@ -214,7 +268,9 @@ test('response notes masked count when PII found', async () => {
   const content = result.content as Array<{ type: string; text: string }>;
   expect((sentBody as { instruction: string }).instruction).toContain('[email]');
   expect((sentBody as { instruction: string }).instruction).not.toContain('jane.doe@example.com');
-  expect(content[0]!.text).toBe('session_id=run_1 step=1 masked=1');
+  expect(content[0]!.text).toBe(
+    'step 1 recorded, session_id=run_1, masked=1. Next: next step, or opendocs_compile when done.'
+  );
 });
 
 test('response omits the note when none found', async () => {
@@ -248,7 +304,9 @@ test('response omits the note when none found', async () => {
 
   const content = result.content as Array<{ type: string; text: string }>;
   expect((sentBody as { instruction: string }).instruction).toBe('Click the blue submit button');
-  expect(content[0]!.text).toBe('session_id=run_1 step=1');
+  expect(content[0]!.text).toBe(
+    'step 1 recorded, session_id=run_1. Next: next step, or opendocs_compile when done.'
+  );
 });
 
 test('stdio server answers tools/list and stays up until stdin closes', async () => {
@@ -402,4 +460,229 @@ test("compile masks PII in the doc title", async () => {
 
   expect(bodies.join("")).toContain("[email]");
   expect(bodies.join("")).not.toContain(email);
+});
+
+test('redaction_script returns the one-line call by default and the full script with install:true', async () => {
+  const client = await connect({ readKey: async () => testKey, fetch: stubFetch({}, 500) });
+
+  const short = await client.callTool({
+    name: 'opendocs_redaction_script',
+    arguments: { target_text: 'Add to cart' },
+  });
+  const full = await client.callTool({
+    name: 'opendocs_redaction_script',
+    arguments: { target_text: 'Add to cart', install: true },
+  });
+
+  const shortText = (short.content as Array<{ text: string }>)[0]!.text;
+  const fullText = (full.content as Array<{ text: string }>)[0]!.text;
+  expect(shortText).toContain('window.__opendocs');
+  expect(shortText.length).toBeLessThan(fullText.length);
+  expect(fullText).toContain('window.__opendocs = { version:');
+});
+
+test('full script from opendocs_redaction_script is minified (no leading indentation lines)', async () => {
+  const client = await connect({ readKey: async () => testKey, fetch: stubFetch({}, 500) });
+
+  const full = await client.callTool({
+    name: 'opendocs_redaction_script',
+    arguments: { install: true },
+  });
+
+  const fullText = (full.content as Array<{ text: string }>)[0]!.text;
+  expect(fullText.includes('\n')).toBe(false);
+  expect(fullText.includes('  ')).toBe(false);
+});
+
+test('target box scales x2 for 2560px image of 1280px viewport', async () => {
+  let sentBody: unknown;
+  const webp = await resizedWebp(2560, 1600);
+  await Bun.write(imagePath, webp);
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: {
+        count: 0,
+        script_version: '2',
+        target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
+      },
+    },
+  });
+
+  expect((sentBody as { box: unknown }).box).toEqual({ x: 200, y: 100, w: 80, h: 40 });
+});
+
+test('full-page image adds scroll offset', async () => {
+  let sentBody: unknown;
+  const webp = await resizedWebp(1280, 3200);
+  await Bun.write(imagePath, webp);
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: {
+        count: 0,
+        script_version: '2',
+        target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 300 },
+      },
+    },
+  });
+
+  expect((sentBody as { box: unknown }).box).toEqual({ x: 100, y: 350, w: 40, h: 20 });
+});
+
+test('explicit box wins over a target in the report', async () => {
+  let sentBody: unknown;
+  const webp = await resizedWebp(2560, 1600);
+  await Bun.write(imagePath, webp);
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      box: { x: 5, y: 6, w: 7, h: 8 },
+      redaction_report: {
+        count: 0,
+        script_version: '2',
+        target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
+      },
+    },
+  });
+
+  expect((sentBody as { box: unknown }).box).toEqual({ x: 5, y: 6, w: 7, h: 8 });
+});
+
+test('no target in the report stores no box', async () => {
+  let sentBody: unknown;
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: { count: 0, script_version: '2' },
+    },
+  });
+
+  expect((sentBody as { box?: unknown }).box).toBeUndefined();
+});
+
+test('target and target_error are stripped from the report before sending to the API', async () => {
+  let sentBody: unknown;
+  const webp = await resizedWebp(2560, 1600);
+  await Bun.write(imagePath, webp);
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'basic',
+      redaction_report: {
+        count: 0,
+        script_version: '2',
+        target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
+      },
+    },
+  });
+
+  const report = (sentBody as { redaction: { report?: Record<string, unknown> } }).redaction.report;
+  expect(report).toEqual({ count: 0, script_version: '2', boxes: undefined });
+  expect(report?.target).toBeUndefined();
+  expect(report?.target_error).toBeUndefined();
 });
