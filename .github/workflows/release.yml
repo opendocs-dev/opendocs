@@ -1,0 +1,100 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; no token anywhere.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Check tag matches package version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version=$(node -p "require('./packages/cli/package.json').version")
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag $tag does not match packages/cli/package.json version $version"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        shell: bash
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        shell: bash
+        run: bun test packages/cli
+
+      - name: Compile
+        shell: bash
+        run: |
+          declare -A ext=(
+            [bun-linux-x64]=""
+            [bun-linux-arm64]=""
+            [bun-darwin-arm64]=""
+            [bun-darwin-x64]=""
+            [bun-windows-x64]=".exe"
+          )
+          for target in "${!ext[@]}"; do
+            bun build --compile --target="$target" "packages/cli/src/main.ts" \
+              --outfile "dist/opendocs-${target}${ext[$target]}"
+          done
+
+      - name: Smoke test --version
+        shell: bash
+        run: ./dist/opendocs-bun-linux-x64 --version
+
+      - name: Smoke test encode
+        shell: bash
+        run: |
+          ./dist/opendocs-bun-linux-x64 \
+            smoke-encode "packages/cli/test/fixtures/sample.png"
+
+      - name: Pack npm packages
+        shell: bash
+        run: bun packages/cli/scripts/npm-pack.ts dist npm-out
+
+      - name: Publish
+        shell: bash
+        run: |
+          version=$(node -p "require('./packages/cli/package.json').version")
+          for dir in npm-out/opendocs-cli-*; do
+            name=$(node -p "require('./$dir/package.json').name")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already published, skipping"
+              continue
+            fi
+            npm publish "$dir" --access public --tag alpha
+          done
+
+          name=$(node -p "require('./npm-out/opendocs-cli/package.json').name")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version already published, skipping"
+          else
+            npm publish npm-out/opendocs-cli --access public --tag alpha
+          fi
