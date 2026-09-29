@@ -40,7 +40,11 @@ function clampBox(box: Box, imageWidth: number, imageHeight: number): Box {
  * @param imageWidth Width in pixels of the uploaded (already-compressed) image.
  * @param imageHeight Height in pixels of the uploaded (already-compressed) image.
  */
-export function computeBoxFromTarget(target: TargetRect, imageWidth: number, imageHeight: number): Box {
+export function computeBoxFromTarget(
+  target: TargetRect,
+  imageWidth: number,
+  imageHeight: number
+): Box | undefined {
   const scale = imageWidth / target.vw;
   const isFullPage = imageHeight / scale > target.vh * FULL_PAGE_HEIGHT_FACTOR;
   const x = isFullPage ? target.x + target.sx : target.x;
@@ -52,5 +56,7 @@ export function computeBoxFromTarget(target: TargetRect, imageWidth: number, ima
     w: Math.round(target.w * scale),
     h: Math.round(target.h * scale),
   };
-  return clampBox(box, imageWidth, imageHeight);
+  const clamped = clampBox(box, imageWidth, imageHeight);
+  if (clamped.w < 2 || clamped.h < 2) return undefined;
+  return clamped;
 }
