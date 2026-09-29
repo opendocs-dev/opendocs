@@ -89,12 +89,12 @@ jobs:
               echo "$name@$version already published, skipping"
               continue
             fi
-            npm publish "$dir" --access public --tag alpha
+            npm publish "./$dir" --access public --tag alpha
           done
 
           name=$(node -p "require('./npm-out/opendocs-cli/package.json').name")
           if npm view "$name@$version" version >/dev/null 2>&1; then
             echo "$name@$version already published, skipping"
           else
-            npm publish npm-out/opendocs-cli --access public --tag alpha
+            npm publish ./npm-out/opendocs-cli --access public --tag alpha
           fi
