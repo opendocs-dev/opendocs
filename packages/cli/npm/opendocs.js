@@ -26,7 +26,7 @@ function main() {
 
   const fail = () => {
     process.stderr.write(
-      `opendocs: no binary for ${platform}-${arch}; expected package ${pkg ?? '<unknown>'} (reinstall without --no-optional)\n`
+      `opendocs: no binary for ${platform}-${arch}; expected package ${pkg ?? '<unknown>'} (reinstall without --no-optional; with npx, clear the cache: rm -rf ~/.npm/_npx)\n`
     );
     process.exit(1);
   };

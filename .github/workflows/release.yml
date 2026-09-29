@@ -92,6 +92,18 @@ jobs:
             npm publish "./$dir" --access public --tag alpha
           done
 
+          # The launcher must not go out before every platform package is visible: npx would
+          # install it without the optional binary and cache that broken install.
+          for dir in npm-out/opendocs-cli-*; do
+            name=$(node -p "require('./$dir/package.json').name")
+            for i in $(seq 1 60); do
+              npm view "$name@$version" version --prefer-online >/dev/null 2>&1 && break
+              [ "$i" = 60 ] && { echo "::error::$name@$version not visible after 10 min"; exit 1; }
+              sleep 10
+            done
+            echo "$name@$version visible"
+          done
+
           name=$(node -p "require('./npm-out/opendocs-cli/package.json').name")
           if npm view "$name@$version" version >/dev/null 2>&1; then
             echo "$name@$version already published, skipping"
