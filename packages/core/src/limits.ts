@@ -59,5 +59,5 @@ export const GLOBAL_BREAKER_ALERT_BYTES = 40 * 1024 * 1024 * 1024; // 42_949_672
 /** Base62 public identifier length (16 chars, 96 bits) */
 export const PUBLIC_ID_LENGTH = 16 as const;
 
-/** Minimum accepted CLI version (semver) */
-export const CLI_MIN_VERSION = '0.1.0' as const;
+/** Minimum accepted CLI version (semver). A prerelease sorts below its release, so the alpha needs its own floor. */
+export const CLI_MIN_VERSION = '0.1.0-alpha.1' as const;
