@@ -12,6 +12,8 @@ import {
   PUBLIC_ID_LENGTH,
   SNAP_TTL,
   SNAP_TTL_VALUES,
+  STEP_ALT_MAX,
+  STEP_TITLE_MAX,
 } from './limits';
 
 describe('limits and constants', () => {
@@ -65,5 +67,13 @@ describe('limits and constants', () => {
   test('CLI_MIN_VERSION is semver format', () => {
     expect(CLI_MIN_VERSION).toBe('0.1.0-alpha.1');
     expect(/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(CLI_MIN_VERSION)).toBe(true);
+  });
+
+  test('STEP_TITLE_MAX equals 60', () => {
+    expect(STEP_TITLE_MAX).toBe(60);
+  });
+
+  test('STEP_ALT_MAX equals 300', () => {
+    expect(STEP_ALT_MAX).toBe(300);
   });
 });
