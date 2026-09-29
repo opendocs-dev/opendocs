@@ -114,6 +114,16 @@ test('uses instant scroll', () => {
   expect(src).toContain('behavior: "instant"');
 });
 
+test('scrolls to the nearest edge, not the viewport centre', () => {
+  const src = buildInstallScript({ mode: 'strict', nonce: 'n1', target_text: 'Add to cart' });
+  expect(src).toContain('block: "nearest", inline: "nearest", behavior: "instant"');
+});
+
+test('one-line call is gated on the current script version', () => {
+  const src = buildOneLineCall({ mode: 'strict', nonce: 'n1' });
+  expect(src).toContain(JSON.stringify(SCRIPT_VERSION));
+});
+
 test('placeholder attribute is considered when matching target text', () => {
   const src = buildInstallScript({ mode: 'strict', nonce: 'n1', target_text: 'Search products' });
   expect(src).toContain('getAttribute("placeholder")');
