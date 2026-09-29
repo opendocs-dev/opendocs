@@ -14,7 +14,7 @@ export function platformPackage(platform, arch) {
     'darwin-x64': 'opendocs-cli-darwin-x64',
     'linux-x64': 'opendocs-cli-linux-x64',
     'linux-arm64': 'opendocs-cli-linux-arm64',
-    'win32-x64': 'opendocs-cli-win32-x64',
+    'win32-x64': 'opendocs-cli-windows-x64',
   };
   return known[`${platform}-${arch}`] ?? null;
 }
