@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { FetchLike } from './api';
 import { createMcpServer, type McpDeps } from './mcp';
+import { computeReportSig } from './redact/hash';
 
 // Token-shaped value assembled at runtime: no key literal in source.
 const testKey = ['od', 'test', 'aaaabbbbcccc'].join('_');
@@ -75,6 +76,41 @@ async function resizedWebp(width: number, height: number): Promise<Uint8Array> {
   const fixture = new URL('../test/fixtures/sample.png', import.meta.url);
   const input = await Bun.file(fixture).bytes();
   return await new Bun.Image(input).resize(width, height, { fit: 'fill' }).webp({ quality: 80 }).bytes();
+}
+
+/** Call opendocs_redaction_script and pull the nonce baked into the returned source. */
+async function issueNonce(client: Client): Promise<string> {
+  const result = await client.callTool({ name: 'opendocs_redaction_script', arguments: {} });
+  const src = (result.content as Array<{ text: string }>)[0]!.text;
+  const match = src.match(/"nonce":"([^"]+)"/);
+  if (!match) throw new Error(`no nonce found in redaction script source: ${src}`);
+  return match[1]!;
+}
+
+interface ReportFields {
+  count?: number;
+  script_version?: string;
+  boxes?: Array<{ x: number; y: number; w: number; h: number }>;
+  target?: { x: number; y: number; w: number; h: number; vw: number; vh: number; sx: number; sy: number };
+  target_error?: string;
+}
+
+/** Build a `redaction_report` signed for `nonce`, as the real script would return. */
+function signedReport(nonce: string, fields: ReportFields = {}) {
+  const count = fields.count ?? 0;
+  const boxes = fields.boxes;
+  const target = fields.target;
+  const targetError = fields.target_error;
+  const sig = computeReportSig(nonce, count, boxes, target, targetError);
+  return {
+    count,
+    script_version: '4',
+    ...(boxes !== undefined ? { boxes } : {}),
+    ...(target !== undefined ? { target } : {}),
+    ...(targetError !== undefined ? { target_error: targetError } : {}),
+    nonce,
+    sig,
+  };
 }
 
 /** Recursively collect every JSON-schema `properties` entry missing a `description`. */
@@ -414,7 +450,15 @@ test('rejects bad arguments with one-line errors and no API call', async () => {
   const bad = [
     { name: 'opendocs_step', arguments: { file_path: imagePath, instruction: 'x', action: 'hover' } },
     { name: 'opendocs_step', arguments: { file_path: imagePath, instruction: '', action: 'click' } },
-    { name: 'opendocs_step', arguments: { file_path: imagePath, instruction: 'x', action: 'click', box: { x: 1, y: 1, w: 'wide', h: 1 } } },
+    {
+      name: 'opendocs_step',
+      arguments: {
+        file_path: imagePath,
+        instruction: 'x',
+        action: 'click',
+        redaction_report: { count: 'nope', script_version: '4', nonce: 'n', sig: 's' },
+      },
+    },
     { name: 'opendocs_snap', arguments: { file_path: imagePath, ttl: '2d' } },
     { name: 'opendocs_compile', arguments: {} },
   ];
@@ -483,6 +527,7 @@ test('step forwards the report and mode', async () => {
     },
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
 
   await client.callTool({
     name: 'opendocs_step',
@@ -492,12 +537,12 @@ test('step forwards the report and mode', async () => {
       action: 'click',
       session_id: 'run_1',
       redact: 'basic',
-      redaction_report: { count: 2, script_version: '1' },
+      redaction_report: signedReport(nonce, { count: 2 }),
     },
   });
 
   expect(sentBody).toMatchObject({
-    redaction: { mode: 'basic', report: { count: 2, script_version: '1' } },
+    redaction: { mode: 'basic', report: { count: 2, script_version: '4' } },
   });
 });
 
@@ -567,6 +612,7 @@ test('target box scales x2 for 2560px image of 1280px viewport', async () => {
     },
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
 
   await client.callTool({
     name: 'opendocs_step',
@@ -576,11 +622,9 @@ test('target box scales x2 for 2560px image of 1280px viewport', async () => {
       action: 'click',
       session_id: 'run_1',
       redact: 'off',
-      redaction_report: {
-        count: 0,
-        script_version: '2',
+      redaction_report: signedReport(nonce, {
         target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
-      },
+      }),
     },
   });
 
@@ -606,6 +650,7 @@ test('full-page image adds scroll offset', async () => {
     },
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
 
   await client.callTool({
     name: 'opendocs_step',
@@ -615,18 +660,41 @@ test('full-page image adds scroll offset', async () => {
       action: 'click',
       session_id: 'run_1',
       redact: 'off',
-      redaction_report: {
-        count: 0,
-        script_version: '2',
+      redaction_report: signedReport(nonce, {
         target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 300 },
-      },
+      }),
     },
   });
 
   expect((sentBody as { box: unknown }).box).toEqual({ x: 100, y: 350, w: 40, h: 20 });
 });
 
-test('explicit box wins over a target in the report', async () => {
+test('box input no longer accepted in the schema', async () => {
+  const client = await connect({ readKey: async () => testKey, fetch: stubFetch({}, 500) });
+  const nonce = await issueNonce(client);
+
+  const stepResult = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      box: { x: 5, y: 6, w: 7, h: 8 },
+      redaction_report: signedReport(nonce),
+    },
+  });
+  expect(stepResult.isError).toBe(true);
+
+  const snapResult = await client.callTool({
+    name: 'opendocs_snap',
+    arguments: { file_path: imagePath, redact: 'off', box: { x: 5, y: 6, w: 7, h: 8 } },
+  });
+  expect(snapResult.isError).toBe(true);
+});
+
+test('valid report accepted and target converted to box', async () => {
   let sentBody: unknown;
   const webp = await resizedWebp(2560, 1600);
   await Bun.write(imagePath, webp);
@@ -645,6 +713,155 @@ test('explicit box wins over a target in the report', async () => {
     },
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: signedReport(nonce, {
+        target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
+      }),
+    },
+  });
+
+  expect(result.isError).toBeUndefined();
+  expect((sentBody as { box: unknown }).box).toEqual({ x: 200, y: 100, w: 80, h: 40 });
+});
+
+test('report with unknown nonce rejected, nothing uploaded', async () => {
+  let calls = 0;
+  const fetchImpl: FetchLike = async () => {
+    calls += 1;
+    return new Response('{}', { status: 500 });
+  };
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: signedReport('never-issued-nonce'),
+    },
+  });
+
+  const content = result.content as Array<{ type: string; text: string }>;
+  expect(result.isError).toBe(true);
+  expect(content[0]!.text).toBe(
+    'redaction_report must be passed exactly as the script returned it; run opendocs_redaction_script again'
+  );
+  expect(calls).toBe(0);
+});
+
+test('reused nonce rejected', async () => {
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: () =>
+      new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
+  const report = signedReport(nonce);
+
+  const first = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: report,
+    },
+  });
+  expect(first.isError).toBeUndefined();
+
+  const second = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click another button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: report,
+    },
+  });
+
+  const content = second.content as Array<{ type: string; text: string }>;
+  expect(second.isError).toBe(true);
+  expect(content[0]!.text).toBe(
+    'redaction_report must be passed exactly as the script returned it; run opendocs_redaction_script again'
+  );
+});
+
+test('edited target (sig mismatch) rejected', async () => {
+  let calls = 0;
+  const fetchImpl: FetchLike = async () => {
+    calls += 1;
+    return new Response('{}', { status: 500 });
+  };
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
+  const report = signedReport(nonce, {
+    target: { x: 494, y: 154, w: 292, h: 37, vw: 1280, vh: 800, sx: 0, sy: 0 },
+  });
+  // An agent editing the target after the fact - the signature no longer matches.
+  const tampered = { ...report, target: { ...report.target, x: 0, y: 0, w: 100, h: 30 } };
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: tampered,
+    },
+  });
+
+  const content = result.content as Array<{ type: string; text: string }>;
+  expect(result.isError).toBe(true);
+  expect(content[0]!.text).toBe(
+    'redaction_report must be passed exactly as the script returned it; run opendocs_redaction_script again'
+  );
+  expect(calls).toBe(0);
+});
+
+test('nonce/sig stripped before API call', async () => {
+  let sentBody: unknown;
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
 
   await client.callTool({
     name: 'opendocs_step',
@@ -653,17 +870,14 @@ test('explicit box wins over a target in the report', async () => {
       instruction: 'Click the button',
       action: 'click',
       session_id: 'run_1',
-      redact: 'off',
-      box: { x: 5, y: 6, w: 7, h: 8 },
-      redaction_report: {
-        count: 0,
-        script_version: '2',
-        target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
-      },
+      redact: 'basic',
+      redaction_report: signedReport(nonce),
     },
   });
 
-  expect((sentBody as { box: unknown }).box).toEqual({ x: 5, y: 6, w: 7, h: 8 });
+  const report = (sentBody as { redaction: { report?: Record<string, unknown> } }).redaction.report;
+  expect(report?.nonce).toBeUndefined();
+  expect(report?.sig).toBeUndefined();
 });
 
 test('no target in the report stores no box', async () => {
@@ -683,6 +897,7 @@ test('no target in the report stores no box', async () => {
     },
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
 
   await client.callTool({
     name: 'opendocs_step',
@@ -692,7 +907,7 @@ test('no target in the report stores no box', async () => {
       action: 'click',
       session_id: 'run_1',
       redact: 'off',
-      redaction_report: { count: 0, script_version: '2' },
+      redaction_report: signedReport(nonce),
     },
   });
 
@@ -718,6 +933,7 @@ test('target and target_error are stripped from the report before sending to the
     },
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
 
   await client.callTool({
     name: 'opendocs_step',
@@ -727,16 +943,14 @@ test('target and target_error are stripped from the report before sending to the
       action: 'click',
       session_id: 'run_1',
       redact: 'basic',
-      redaction_report: {
-        count: 0,
-        script_version: '2',
+      redaction_report: signedReport(nonce, {
         target: { x: 100, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
-      },
+      }),
     },
   });
 
   const report = (sentBody as { redaction: { report?: Record<string, unknown> } }).redaction.report;
-  expect(report).toEqual({ count: 0, script_version: '2', boxes: undefined });
+  expect(report).toEqual({ count: 0, script_version: '4', boxes: undefined });
   expect(report?.target).toBeUndefined();
   expect(report?.target_error).toBeUndefined();
 });
@@ -755,6 +969,7 @@ test('step result says no highlight with the reason when target_error is set', a
       }),
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
 
   const result = await client.callTool({
     name: 'opendocs_step',
@@ -764,7 +979,7 @@ test('step result says no highlight with the reason when target_error is set', a
       action: 'click',
       session_id: 'run_1',
       redact: 'off',
-      redaction_report: { count: 0, script_version: '3', target_error: 'target outside the viewport' },
+      redaction_report: signedReport(nonce, { target_error: 'target outside the viewport' }),
     },
   });
 
@@ -793,6 +1008,7 @@ test('step result says no highlight when a target box clamps to zero area', asyn
     },
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
 
   const result = await client.callTool({
     name: 'opendocs_step',
@@ -802,11 +1018,9 @@ test('step result says no highlight when a target box clamps to zero area', asyn
       action: 'click',
       session_id: 'run_1',
       redact: 'off',
-      redaction_report: {
-        count: 0,
-        script_version: '3',
+      redaction_report: signedReport(nonce, {
         target: { x: 1280, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
-      },
+      }),
     },
   });
 
@@ -830,6 +1044,8 @@ test('no-highlight step result stays within the token cap', async () => {
       }),
   });
   const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
+  const targetError = 'not found: a very long target text that could in principle blow past the fifty token response cap';
 
   const result = await client.callTool({
     name: 'opendocs_step',
@@ -839,12 +1055,7 @@ test('no-highlight step result stays within the token cap', async () => {
       action: 'click',
       session_id: 'run_1',
       redact: 'off',
-      redaction_report: {
-        count: 0,
-        script_version: '3',
-        target_error:
-          'not found: a very long target text that could in principle blow past the fifty token response cap',
-      },
+      redaction_report: signedReport(nonce, { target_error: targetError }),
     },
   });
 
