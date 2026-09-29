@@ -1,4 +1,5 @@
 import { type Static, Type } from '@sinclair/typebox';
+import { STEP_ALT_MAX, STEP_TITLE_MAX } from './limits';
 
 /**
  * OpenDocs API v1 Route Registry.
@@ -156,10 +157,20 @@ export const BoxSchema = Type.Object({
 
 export type Box = Static<typeof BoxSchema>;
 
+export const ViewportSchema = Type.Object({
+  w: Type.Number(),
+  h: Type.Number(),
+  dpr: Type.Number(),
+});
+
+export type Viewport = Static<typeof ViewportSchema>;
+
 export const RedactionReportSchema = Type.Object({
   count: Type.Number(),
   script_version: Type.String(),
   boxes: Type.Optional(Type.Array(BoxSchema)),
+  viewport: Type.Optional(ViewportSchema),
+  iframes: Type.Optional(Type.Number()),
 });
 
 export type RedactionReport = Static<typeof RedactionReportSchema>;
@@ -198,6 +209,8 @@ export const AddStepBodySchema = Type.Object({
   selector: Type.Optional(Type.String()),
   box: Type.Optional(BoxSchema),
   instruction: Type.String(),
+  title: Type.Optional(Type.String({ minLength: 1, maxLength: STEP_TITLE_MAX })),
+  alt: Type.Optional(Type.String({ minLength: 1, maxLength: STEP_ALT_MAX })),
   page_url: Type.Optional(Type.String()),
   redaction: Type.Optional(RedactionConfigSchema),
 });
@@ -295,11 +308,15 @@ export const DocStepSchema = Type.Object({
   order: Type.Number(),
   action: Type.String(),
   instruction: Type.String(),
+  title: Type.Optional(Type.String()),
+  alt: Type.Optional(Type.String()),
   page_url: Type.Optional(Type.String()),
   selector: Type.Optional(Type.String()),
   box: Type.Optional(BoxSchema),
   image: DocStepImageSchema,
   redaction_mode: Type.Optional(Type.String()),
+  viewport: Type.Optional(ViewportSchema),
+  iframes: Type.Optional(Type.Number()),
 });
 
 export type DocStep = Static<typeof DocStepSchema>;
