@@ -107,8 +107,62 @@ test('instructions are sent on initialize', async () => {
   const instructions = client.getInstructions();
   expect(instructions).toBeDefined();
   expect(instructions!.length).toBeGreaterThan(0);
-  expect(instructions!.length).toBeLessThanOrEqual(1800);
+  expect(instructions!.length).toBeLessThanOrEqual(2200);
   expect(instructions).toContain('opendocs_compile');
+});
+
+test('instructions say one UI action per step', async () => {
+  const server = createMcpServer({
+    loadUserMode: async () => undefined,
+    loadAppConfig: async () => ({}),
+    cwd: () => '/tmp',
+  });
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  const instructions = client.getInstructions();
+  expect(instructions).toContain('One UI action per step');
+  expect(instructions).toContain('never write "click X, then Y" in one step');
+});
+
+test('instructions forbid URL tricks', async () => {
+  const server = createMcpServer({
+    loadUserMode: async () => undefined,
+    loadAppConfig: async () => ({}),
+    cwd: () => '/tmp',
+  });
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  const instructions = client.getInstructions();
+  expect(instructions).toContain('never navigate by editing the URL or adding query params');
+});
+
+test('instructions tell install:true after navigation', async () => {
+  const server = createMcpServer({
+    loadUserMode: async () => undefined,
+    loadAppConfig: async () => ({}),
+    cwd: () => '/tmp',
+  });
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  const instructions = client.getInstructions();
+  expect(instructions).toContain(
+    'After every page load or navigation, call it with install:true directly - don\'t probe first.'
+  );
+});
+
+test('redaction_script tool description tells install:true after navigation, not probe-first', async () => {
+  const client = await connect({ readKey: async () => testKey, fetch: stubFetch({}, 500) });
+  const { tools } = await client.listTools();
+
+  const tool = tools.find((t) => t.name === 'opendocs_redaction_script');
+  expect(tool?.description).toContain('Call with install:true directly after every page load or navigation');
+  expect(tool?.description).not.toContain('Returns a short one-line call by default');
 });
 
 test('every input property of every tool has a description', async () => {
