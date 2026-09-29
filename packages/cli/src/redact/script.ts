@@ -26,7 +26,7 @@ import {
 import { canonicalReportSourceLines } from './hash';
 
 /** Bumped whenever the emitted script's behavior changes; travels in the report. */
-export const SCRIPT_VERSION = '4';
+export const SCRIPT_VERSION = '5';
 
 /** Per-call options baked into the emitted script as a JSON literal. */
 export interface RunOptions {
@@ -307,7 +307,7 @@ function coreLines(): string[] {
     '    if (target) {',
     // instant, not the page's own smooth scroll-behavior, so the rect below
     // reflects where the element actually landed rather than mid-animation.
-    '      target.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });',
+    '      target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });',
     '      var trect = target.getBoundingClientRect();',
     '      var outside = trect.bottom <= 0 || trect.top >= window.innerHeight || trect.right <= 0 || trect.left >= window.innerWidth;',
     '      if (outside) {',
