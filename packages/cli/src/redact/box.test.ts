@@ -25,6 +25,21 @@ test('short screenshot is not treated as full-page', () => {
 test('clamps box to image bounds', () => {
   const target: TargetRect = { x: 1250, y: 780, w: 100, h: 100, vw: 1280, vh: 800, sx: 0, sy: 0 };
   const box = computeBoxFromTarget(target, 1280, 800);
-  expect(box.x + box.w).toBeLessThanOrEqual(1280);
-  expect(box.y + box.h).toBeLessThanOrEqual(800);
+  expect(box).toBeDefined();
+  expect(box!.x + box!.w).toBeLessThanOrEqual(1280);
+  expect(box!.y + box!.h).toBeLessThanOrEqual(800);
+});
+
+test('zero-area box is dropped', () => {
+  // Target sits right at the right edge: after clamping to the image bounds
+  // the box has zero width, so no highlight box should be sent at all.
+  const target: TargetRect = { x: 1280, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 };
+  const box = computeBoxFromTarget(target, 1280, 800);
+  expect(box).toBeUndefined();
+});
+
+test('sub-2px box is dropped even without clamping', () => {
+  const target: TargetRect = { x: 100, y: 50, w: 1, h: 1, vw: 1280, vh: 800, sx: 0, sy: 0 };
+  const box = computeBoxFromTarget(target, 1280, 800);
+  expect(box).toBeUndefined();
 });

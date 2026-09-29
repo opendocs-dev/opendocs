@@ -23,7 +23,7 @@ import {
 } from '@opendocs/core/redaction';
 
 /** Bumped whenever the emitted script's behavior changes; travels in the report. */
-export const SCRIPT_VERSION = '2';
+export const SCRIPT_VERSION = '3';
 
 /** Per-call options baked into the emitted script as a JSON literal. */
 export interface RunOptions {
@@ -203,11 +203,19 @@ function coreLines(): string[] {
     '  return parts;',
     '}',
 
-    // Exact match (case-insensitive, trimmed) beats a mere substring match; within
-    // a tier the smallest visible element wins, so a link's tiny icon-only child
-    // does not lose to the whole nav bar it sits inside.
+    // Text on the page often carries line breaks a human would read as a single
+    // space (e.g. a version badge with the tag on its own line), so both the
+    // wanted text and every candidate text are collapsed the same way before
+    // comparing.
+    'function normalizeText(text) {',
+    '  return text.replace(/\\s+/g, " ").trim().toLowerCase();',
+    '}',
+
+    // Exact match (case-insensitive, whitespace-collapsed) beats a mere substring
+    // match; within a tier the smallest visible element wins, so a link's tiny
+    // icon-only child does not lose to the whole nav bar it sits inside.
     'function findTargetByText(text) {',
-    '  var needle = text.trim().toLowerCase();',
+    '  var needle = normalizeText(text);',
     '  var candidates = findAllDeep(TEXT_TARGET_SELECTOR);',
     '  var exact = [];',
     '  var contains = [];',
@@ -218,7 +226,7 @@ function coreLines(): string[] {
     '    var isExact = false;',
     '    var isContains = false;',
     '    for (var j = 0; j < texts.length; j++) {',
-    '      var t = texts[j].trim().toLowerCase();',
+    '      var t = normalizeText(texts[j]);',
     '      if (!t) continue;',
     '      if (t === needle) { isExact = true; break; }',
     '      if (t.indexOf(needle) !== -1) isContains = true;',
@@ -288,9 +296,16 @@ function coreLines(): string[] {
     '  if (opts.target_selector || opts.target_text) {',
     '    var target = opts.target_selector ? findTargetBySelector(opts.target_selector) : findTargetByText(opts.target_text);',
     '    if (target) {',
-    '      target.scrollIntoView({ block: "center", inline: "center" });',
+    // instant, not the page's own smooth scroll-behavior, so the rect below
+    // reflects where the element actually landed rather than mid-animation.
+    '      target.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });',
     '      var trect = target.getBoundingClientRect();',
-    '      report.target = { x: trect.x, y: trect.y, w: trect.width, h: trect.height, vw: window.innerWidth, vh: window.innerHeight, sx: window.scrollX, sy: window.scrollY };',
+    '      var outside = trect.bottom <= 0 || trect.top >= window.innerHeight || trect.right <= 0 || trect.left >= window.innerWidth;',
+    '      if (outside) {',
+    '        report.target_error = "target outside the viewport";',
+    '      } else {',
+    '        report.target = { x: trect.x, y: trect.y, w: trect.width, h: trect.height, vw: window.innerWidth, vh: window.innerHeight, sx: window.scrollX, sy: window.scrollY };',
+    '      }',
     '    } else {',
     '      report.target_error = "not found: " + (opts.target_text || opts.target_selector);',
     '    }',

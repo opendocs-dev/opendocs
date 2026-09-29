@@ -468,6 +468,15 @@ async function handleStep(
     box = computeBoxFromTarget(parsed.redaction_report.target, metadata.width, metadata.height);
   }
 
+  // A target or target_error was requested but no box ends up going out; tell
+  // the caller why so it knows the highlight was skipped rather than lost.
+  const hadTargetAttempt =
+    parsed.redaction_report?.target !== undefined || parsed.redaction_report?.target_error !== undefined;
+  const noHighlightReason =
+    box === undefined && hadTargetAttempt
+      ? parsed.redaction_report?.target_error ?? 'target outside the screenshot'
+      : undefined;
+
   const uploaded = await uploadAsset(key, prepared.bytes, 'step', undefined, fetchImpl);
   if (!uploaded.ok) return textResult(mapApiError(uploaded), true);
 
@@ -488,9 +497,16 @@ async function handleStep(
   if (!step.ok) return textResult(mapApiError(step), true);
 
   const maskedNote = maskedInstruction.count > 0 ? `, masked=${maskedInstruction.count}` : '';
+  const highlightNote = noHighlightReason ? `, no highlight (${shortenReason(noHighlightReason)})` : '';
   return textResult(
-    `step ${step.data.order} recorded, session_id=${sessionId}${maskedNote}. Next: next step, or opendocs_compile when done.`
+    `step ${step.data.order} recorded, session_id=${sessionId}${maskedNote}${highlightNote}. ` +
+      'Next: next step, or opendocs_compile when done.'
   );
+}
+
+/** Keep a no-highlight reason short enough that the step result stays within the 50-token cap. */
+function shortenReason(reason: string): string {
+  return reason.length > 60 ? `${reason.slice(0, 59)}…` : reason;
 }
 
 async function handleCompile(

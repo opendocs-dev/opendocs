@@ -686,3 +686,114 @@ test('target and target_error are stripped from the report before sending to the
   expect(report?.target).toBeUndefined();
   expect(report?.target_error).toBeUndefined();
 });
+
+test('step result says no highlight with the reason when target_error is set', async () => {
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: () =>
+      new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: { count: 0, script_version: '3', target_error: 'target outside the viewport' },
+    },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toBe(
+    'step 1 recorded, session_id=run_1, no highlight (target outside the viewport). Next: next step, or opendocs_compile when done.'
+  );
+});
+
+test('step result says no highlight when a target box clamps to zero area', async () => {
+  const webp = await resizedWebp(1280, 800);
+  await Bun.write(imagePath, webp);
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      // capture and pass through so we can inspect the highlight-free text
+      JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: {
+        count: 0,
+        script_version: '3',
+        target: { x: 1280, y: 50, w: 40, h: 20, vw: 1280, vh: 800, sx: 0, sy: 0 },
+      },
+    },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toBe(
+    'step 1 recorded, session_id=run_1, no highlight (target outside the screenshot). Next: next step, or opendocs_compile when done.'
+  );
+});
+
+test('no-highlight step result stays within the token cap', async () => {
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: () =>
+      new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: {
+        count: 0,
+        script_version: '3',
+        target_error:
+          'not found: a very long target text that could in principle blow past the fifty token response cap',
+      },
+    },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(estimatedTokens(text)).toBeLessThanOrEqual(50);
+});
