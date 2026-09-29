@@ -40,13 +40,24 @@ export interface HashTarget {
   sy: number;
 }
 
-/** Canonical string signed by {@link fnv1aHex}: nonce|count|boxes json|target json (or "none")|target_error. */
+export interface HashViewport {
+  w: number;
+  h: number;
+  dpr: number;
+}
+
+/**
+ * Canonical string signed by {@link fnv1aHex}:
+ * nonce|count|boxes json|target json (or "none")|target_error|viewport json (or "none")|iframes.
+ */
 export function canonicalReportString(
   nonce: string,
   count: number,
   boxes: readonly HashBox[] | undefined,
   target: HashTarget | undefined,
-  targetError: string | undefined
+  targetError: string | undefined,
+  viewport?: HashViewport,
+  iframes?: number
 ): string {
   const roundedBoxes = (boxes ?? []).map((b) => ({
     x: roundTo2(b.x),
@@ -66,7 +77,14 @@ export function canonicalReportString(
         sy: roundTo2(target.sy),
       })
     : 'none';
-  return `${nonce}|${count}|${JSON.stringify(roundedBoxes)}|${targetPart}|${targetError ?? ''}`;
+  const viewportPart = viewport
+    ? JSON.stringify({ w: roundTo2(viewport.w), h: roundTo2(viewport.h), dpr: roundTo2(viewport.dpr) })
+    : 'none';
+  const iframesPart = iframes ?? 0;
+  return (
+    `${nonce}|${count}|${JSON.stringify(roundedBoxes)}|${targetPart}|${targetError ?? ''}` +
+    `|${viewportPart}|${iframesPart}`
+  );
 }
 
 /** Compute the report signature: {@link fnv1aHex} of {@link canonicalReportString}. */
@@ -75,9 +93,11 @@ export function computeReportSig(
   count: number,
   boxes: readonly HashBox[] | undefined,
   target: HashTarget | undefined,
-  targetError: string | undefined
+  targetError: string | undefined,
+  viewport?: HashViewport,
+  iframes?: number
 ): string {
-  return fnv1aHex(canonicalReportString(nonce, count, boxes, target, targetError));
+  return fnv1aHex(canonicalReportString(nonce, count, boxes, target, targetError, viewport, iframes));
 }
 
 /**
@@ -100,7 +120,7 @@ export function canonicalReportSourceLines(): string[] {
 
     'function roundTo2(n) { return Math.round(n * 100) / 100; }',
 
-    'function canonicalReportString(nonce, count, boxes, target, targetError) {',
+    'function canonicalReportString(nonce, count, boxes, target, targetError, viewport, iframes) {',
     '  var roundedBoxes = (boxes || []).map(function (b) {',
     '    return { x: roundTo2(b.x), y: roundTo2(b.y), w: roundTo2(b.w), h: roundTo2(b.h) };',
     '  });',
@@ -108,11 +128,16 @@ export function canonicalReportSourceLines(): string[] {
     '    x: roundTo2(target.x), y: roundTo2(target.y), w: roundTo2(target.w), h: roundTo2(target.h),',
     '    vw: roundTo2(target.vw), vh: roundTo2(target.vh), sx: roundTo2(target.sx), sy: roundTo2(target.sy)',
     '  }) : "none";',
-    '  return nonce + "|" + count + "|" + JSON.stringify(roundedBoxes) + "|" + targetPart + "|" + (targetError || "");',
+    '  var viewportPart = viewport ? JSON.stringify({',
+    '    w: roundTo2(viewport.w), h: roundTo2(viewport.h), dpr: roundTo2(viewport.dpr)',
+    '  }) : "none";',
+    '  var iframesPart = iframes || 0;',
+    '  return nonce + "|" + count + "|" + JSON.stringify(roundedBoxes) + "|" + targetPart + "|" + (targetError || "") +',
+    '    "|" + viewportPart + "|" + iframesPart;',
     '}',
 
-    'function computeReportSig(nonce, count, boxes, target, targetError) {',
-    '  return fnv1aHex(canonicalReportString(nonce, count, boxes, target, targetError));',
+    'function computeReportSig(nonce, count, boxes, target, targetError, viewport, iframes) {',
+    '  return fnv1aHex(canonicalReportString(nonce, count, boxes, target, targetError, viewport, iframes));',
     '}',
   ];
 }
