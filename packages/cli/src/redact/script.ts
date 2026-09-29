@@ -9,9 +9,11 @@
  * SCRIPT_VERSION) and calls `run`; the short form (`buildOneLineCall`) just
  * calls the already-installed `run`, returning `{installed: false}` if it
  * is not there yet so the caller knows to fall back to the full form. Both
- * bake the same per-call options (mode, selectors, allow, target) as a JSON
- * literal, so the emitted text has no imports and no references to anything
- * outside itself at runtime.
+ * bake the same per-call options (mode, nonce, selectors, allow, target) as
+ * a JSON literal, so the emitted text has no imports and no references to
+ * anything outside itself at runtime. The returned report carries the
+ * baked-in nonce and a signature over its own contents (see redact/hash.ts),
+ * so the MCP server can tell a genuine report from an edited or invented one.
  */
 import {
   CARD_CANDIDATE_PATTERN,
@@ -21,13 +23,16 @@ import {
   PHONE_ID_PATTERN,
   TOKEN_PATTERN,
 } from '@opendocs/core/redaction';
+import { canonicalReportSourceLines } from './hash';
 
 /** Bumped whenever the emitted script's behavior changes; travels in the report. */
-export const SCRIPT_VERSION = '3';
+export const SCRIPT_VERSION = '4';
 
 /** Per-call options baked into the emitted script as a JSON literal. */
 export interface RunOptions {
   mode: 'strict' | 'basic' | 'off';
+  /** Anti-tampering nonce issued by the MCP server; signs the returned report. */
+  nonce: string;
   selectors?: string[];
   allow?: string[];
   target_selector?: string;
@@ -200,6 +205,8 @@ function coreLines(): string[] {
     '  if (aria) parts.push(aria);',
     '  var title = el.getAttribute && el.getAttribute("title");',
     '  if (title) parts.push(title);',
+    '  var placeholder = el.getAttribute && el.getAttribute("placeholder");',
+    '  if (placeholder) parts.push(placeholder);',
     '  return parts;',
     '}',
 
@@ -244,6 +251,8 @@ function coreLines(): string[] {
     '  }',
     '  return best;',
     '}',
+
+    ...canonicalReportSourceLines(),
 
     'function run(opts) {',
     '  var mode = opts.mode;',
@@ -310,6 +319,8 @@ function coreLines(): string[] {
     '      report.target_error = "not found: " + (opts.target_text || opts.target_selector);',
     '    }',
     '  }',
+    '  report.nonce = opts.nonce;',
+    '  report.sig = computeReportSig(opts.nonce, report.count, report.boxes, report.target, report.target_error);',
     '  return report;',
     '}',
 
