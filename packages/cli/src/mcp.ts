@@ -16,6 +16,8 @@ import { readCredentials } from './config';
 import { maskStepText } from './pii';
 import { computeBoxFromTarget, type TargetRect } from './redact/box';
 import { loadAppConfig, loadUserMode, requireReport, resolveMode, type RedactMode } from './redact/enforce';
+import { computeReportSig } from './redact/hash';
+import { createNonceStore, type NonceStore } from './redact/nonce';
 import { buildInstallScript, buildOneLineCall, type RunOptions } from './redact/script';
 import { prepareImage, uploadImage } from './upload';
 import pkg from '../package.json' with { type: 'json' };
@@ -68,7 +70,7 @@ Then for EACH step, in this exact order:
 1. Call opendocs_redaction_script with target_text (the visible label of the element you are about to click/type into) or target_selector. After every page load or navigation, call it with install:true directly - don't probe first. On later steps on the same page, use the default one-line call.
 2. Run the returned function in the page with your browser evaluate tool. If it evaluates to {installed:false}, call opendocs_redaction_script again with install:true, run THAT, then continue.
 3. Take a VIEWPORT screenshot (not full-page) and save it to a file your browser tool can write. When the target is inside a list or section, keep that section's heading visible if it fits - the script centers the target, so scroll up only a little if the heading is just out of view.
-4. Call opendocs_step with file_path, instruction (imperative, what the reader does, e.g. "Click **Add to cart**" - bold the exact visible label), action, page_url, and redaction_report exactly as returned - it carries the highlight target.
+4. Call opendocs_step with file_path, instruction (imperative, what the reader does, e.g. "Click **Add to cart**" - bold the exact visible label), action, page_url, and redaction_report exactly as returned by the script - never edit it, and never construct one yourself; there is no box parameter, the highlight comes only from the report's target.
 5. THEN perform the click/type/navigation. Never screenshot after acting; the screenshot must show the page BEFORE the action.
 Reuse the session_id from the first step's result on every later step. A final result step (e.g. a confirmation page) can omit target_text/target_selector. After the LAST step, ALWAYS call opendocs_compile with session_id and a title, then give the user the URL - never stop before compiling. Never type real secrets into forms; redaction covers password fields for you.`;
 
@@ -76,9 +78,7 @@ const REDACT_MODE_VALUES = ['strict', 'basic', 'off'] as const;
 
 const BOX_INPUT_SCHEMA = {
   type: 'object',
-  description:
-    'Highlight box in screenshot pixels. Optional: normally omit this and pass redaction_report ' +
-    'instead, and the box is computed from its target for you.',
+  description: 'One redacted element\'s covered region, in screenshot pixels.',
   properties: {
     x: { type: 'number', description: 'Left edge, in screenshot pixels.' },
     y: { type: 'number', description: 'Top edge, in screenshot pixels.' },
@@ -110,7 +110,7 @@ const REDACTION_REPORT_INPUT_SCHEMA = {
   type: 'object',
   description:
     'The object returned by running the opendocs_redaction_script function in the page. Pass it back ' +
-    'unchanged.',
+    'exactly as returned - never edit it or build one yourself; it is rejected otherwise.',
   properties: {
     count: { type: 'number', description: 'Number of elements the script redacted.' },
     script_version: { type: 'string', description: "The script's version, as returned." },
@@ -121,8 +121,10 @@ const REDACTION_REPORT_INPUT_SCHEMA = {
     },
     target: { ...TARGET_INPUT_SCHEMA, description: 'The located target, if target_selector/target_text was set.' },
     target_error: { type: 'string', description: 'Set instead of target when the target was not found.' },
+    nonce: { type: 'string', description: "The script's anti-tampering nonce, as returned." },
+    sig: { type: 'string', description: "The script's signature over the report, as returned." },
   },
-  required: ['count', 'script_version'],
+  required: ['count', 'script_version', 'nonce', 'sig'],
   additionalProperties: false,
 } as const;
 
@@ -156,7 +158,6 @@ const STEP_INPUT_SCHEMA = {
       description: 'The kind of action this step performs.',
     },
     selector: { type: 'string', description: 'Optional CSS selector of the acted-on element, for reference.' },
-    box: BOX_INPUT_SCHEMA,
     page_url: { type: 'string', description: 'URL of the page shown in this step.' },
     session_id: {
       type: 'string',
@@ -228,10 +229,12 @@ function parseRedact(value: unknown): { value: RedactMode | undefined } | string
   return { value: value as RedactMode };
 }
 
-/** A {@link RedactionReport} plus the target-finding fields the browser script may add. */
+/** A {@link RedactionReport} plus the target-finding and signature fields the browser script adds. */
 export interface ParsedRedactionReport extends RedactionReport {
   target?: TargetRect;
   target_error?: string;
+  nonce: string;
+  sig: string;
 }
 
 /** Validate a `redaction_report.target` field, or return a one-line error. */
@@ -277,16 +280,38 @@ function parseRedactionReport(value: unknown): ParsedRedactionReport | undefined
   if (r.target_error !== undefined && typeof r.target_error !== 'string') {
     return 'redaction_report.target_error must be a string';
   }
+  if (typeof r.nonce !== 'string' || r.nonce.length === 0) return REPORT_TAMPER_MESSAGE;
+  if (typeof r.sig !== 'string' || r.sig.length === 0) return REPORT_TAMPER_MESSAGE;
   return {
     count: r.count,
     script_version: r.script_version,
     boxes: r.boxes as Box[] | undefined,
     target,
     target_error: r.target_error as string | undefined,
+    nonce: r.nonce,
+    sig: r.sig,
   };
 }
 
-/** Strip the browser-side target-finding fields the API's redaction schema doesn't know about. */
+/** The one-line message returned whenever a report fails nonce/signature verification. */
+const REPORT_TAMPER_MESSAGE =
+  'redaction_report must be passed exactly as the script returned it; run opendocs_redaction_script again';
+
+/**
+ * Verify a report's nonce and signature against `store`, consuming the nonce
+ * on success so it cannot be replayed. Returns {@link REPORT_TAMPER_MESSAGE}
+ * for any failure: unknown/expired/reused nonce, or a signature that does not
+ * match the report's own contents (an edited or hand-built report).
+ */
+function verifyReport(report: ParsedRedactionReport, store: NonceStore): string | undefined {
+  if (!store.isValid(report.nonce)) return REPORT_TAMPER_MESSAGE;
+  const expectedSig = computeReportSig(report.nonce, report.count, report.boxes, report.target, report.target_error);
+  if (expectedSig !== report.sig) return REPORT_TAMPER_MESSAGE;
+  store.consume(report.nonce);
+  return undefined;
+}
+
+/** Strip the browser-side fields the API's redaction schema doesn't know about. */
 function stripTarget(report: ParsedRedactionReport): RedactionReport {
   return { count: report.count, script_version: report.script_version, boxes: report.boxes };
 }
@@ -337,7 +362,6 @@ interface StepArgs {
   instruction: string;
   action: StepAction;
   selector?: string;
-  box?: Box;
   page_url?: string;
   session_id?: string;
   title?: string;
@@ -355,8 +379,6 @@ function parseStepArgs(args: unknown): StepArgs | string {
     return 'action must be one of click, type, navigate, other';
   }
   if (a.selector !== undefined && typeof a.selector !== 'string') return 'selector must be a string';
-  const box = parseBox(a.box);
-  if (typeof box === 'string') return box;
   if (a.page_url !== undefined && typeof a.page_url !== 'string') return 'page_url must be a string';
   if (a.session_id !== undefined && typeof a.session_id !== 'string') return 'session_id must be a string';
   if (a.title !== undefined && typeof a.title !== 'string') return 'title must be a string';
@@ -369,7 +391,6 @@ function parseStepArgs(args: unknown): StepArgs | string {
     instruction: a.instruction,
     action: a.action as StepAction,
     selector: a.selector as string | undefined,
-    box,
     page_url: a.page_url as string | undefined,
     session_id: a.session_id as string | undefined,
     title: a.title as string | undefined,
@@ -409,7 +430,8 @@ async function handleSnap(
   readKey: () => Promise<string | null>,
   loadUser: () => Promise<RedactMode | undefined>,
   loadApp: (cwd: string) => Promise<{ mode?: RedactMode }>,
-  cwd: () => string
+  cwd: () => string,
+  nonceStore: NonceStore
 ): Promise<ToolResult> {
   const parsed = parseSnapArgs(args);
   if (typeof parsed === 'string') return textResult(parsed, true);
@@ -422,6 +444,10 @@ async function handleSnap(
     requireReport(mode, parsed.redaction_report);
   } catch (error) {
     return textResult(error instanceof Error ? error.message : String(error), true);
+  }
+  if (parsed.redaction_report !== undefined) {
+    const tamperError = verifyReport(parsed.redaction_report, nonceStore);
+    if (tamperError) return textResult(tamperError, true);
   }
 
   const uploaded = await uploadImage(parsed.file_path, key, 'snap', parsed.ttl, fetchImpl);
@@ -436,7 +462,8 @@ async function handleStep(
   readKey: () => Promise<string | null>,
   loadUser: () => Promise<RedactMode | undefined>,
   loadApp: (cwd: string) => Promise<{ mode?: RedactMode }>,
-  cwd: () => string
+  cwd: () => string,
+  nonceStore: NonceStore
 ): Promise<ToolResult> {
   const parsed = parseStepArgs(args);
   if (typeof parsed === 'string') return textResult(parsed, true);
@@ -449,6 +476,10 @@ async function handleStep(
     requireReport(mode, parsed.redaction_report);
   } catch (error) {
     return textResult(error instanceof Error ? error.message : String(error), true);
+  }
+  if (parsed.redaction_report !== undefined) {
+    const tamperError = verifyReport(parsed.redaction_report, nonceStore);
+    if (tamperError) return textResult(tamperError, true);
   }
 
   const maskedInstruction = maskStepText(parsed.instruction);
@@ -464,8 +495,8 @@ async function handleStep(
   const prepared = await prepareImage(parsed.file_path);
   if (!prepared.ok) return textResult(prepared.message, true);
 
-  let box = parsed.box;
-  if (box === undefined && parsed.redaction_report?.target !== undefined) {
+  let box: Box | undefined;
+  if (parsed.redaction_report?.target !== undefined) {
     const metadata = await new Bun.Image(prepared.bytes).metadata();
     box = computeBoxFromTarget(parsed.redaction_report.target, metadata.width, metadata.height);
   }
@@ -563,7 +594,8 @@ async function handleRedactionScript(
   args: unknown,
   loadUser: () => Promise<RedactMode | undefined>,
   loadApp: (cwd: string) => Promise<{ mode?: RedactMode; selectors?: string[]; allow?: string[] }>,
-  cwd: () => string
+  cwd: () => string,
+  nonceStore: NonceStore
 ): Promise<ToolResult> {
   const parsed = parseRedactionScriptArgs(args);
   if (typeof parsed === 'string') return textResult(parsed, true);
@@ -573,6 +605,7 @@ async function handleRedactionScript(
 
   const options: RunOptions = {
     mode,
+    nonce: nonceStore.issue(),
     selectors: app.selectors,
     allow: app.allow,
     target_selector: parsed.target_selector,
@@ -594,6 +627,7 @@ export function createMcpServer(deps: McpDeps = {}): Server {
   const loadUser = deps.loadUserMode ?? loadUserMode;
   const loadApp = deps.loadAppConfig ?? loadAppConfig;
   const cwd = deps.cwd ?? (() => process.cwd());
+  const nonceStore = createNonceStore();
 
   const server = new Server(
     { name: 'opendocs', version: pkg.version },
@@ -617,15 +651,17 @@ export function createMcpServer(deps: McpDeps = {}): Server {
         name: 'opendocs_snap',
         description:
           'Upload a short-lived screenshot and get back its URL. Run opendocs_redaction_script first ' +
-          'and pass its report unless redact is "off".',
+          'and pass its report exactly as returned unless redact is "off" - never edit it or build one ' +
+          'yourself.',
         inputSchema: SNAP_INPUT_SCHEMA,
       },
       {
         name: 'opendocs_step',
         description:
           'Record one documentation step: uploads an image and adds it to a run. Run ' +
-          'opendocs_redaction_script first and pass its report unless redact is "off". The highlight ' +
-          'box is computed automatically from the report\'s target; only pass box yourself to override.',
+          'opendocs_redaction_script first and pass its report exactly as returned unless redact is ' +
+          '"off" - never edit it or build one yourself. The highlight box is computed automatically ' +
+          'from the report\'s target; there is no box parameter.',
         inputSchema: STEP_INPUT_SCHEMA,
       },
       {
@@ -641,11 +677,11 @@ export function createMcpServer(deps: McpDeps = {}): Server {
     try {
       switch (name) {
         case 'opendocs_redaction_script':
-          return await handleRedactionScript(args, loadUser, loadApp, cwd);
+          return await handleRedactionScript(args, loadUser, loadApp, cwd, nonceStore);
         case 'opendocs_snap':
-          return await handleSnap(args, fetchImpl, readKey, loadUser, loadApp, cwd);
+          return await handleSnap(args, fetchImpl, readKey, loadUser, loadApp, cwd, nonceStore);
         case 'opendocs_step':
-          return await handleStep(args, fetchImpl, readKey, loadUser, loadApp, cwd);
+          return await handleStep(args, fetchImpl, readKey, loadUser, loadApp, cwd, nonceStore);
         case 'opendocs_compile':
           return await handleCompile(args, fetchImpl, readKey);
         default:
