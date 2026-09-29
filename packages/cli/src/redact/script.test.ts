@@ -7,16 +7,27 @@ import {
   PHONE_ID_PATTERN,
   TOKEN_PATTERN,
 } from '@opendocs/core/redaction';
-import { buildRedactionScript, SCRIPT_VERSION } from './script';
+import { buildInstallScript, buildOneLineCall, SCRIPT_VERSION } from './script';
 
-test('built source parses as a function', () => {
-  const src = buildRedactionScript({ mode: 'strict' });
-  const fn = new Function(`return ${src}`)();
+/** Evaluate an emitted `() => {...}` script source and return the arrow function. */
+function toFunction(src: string): (...args: unknown[]) => unknown {
+  return new Function(`return ${src}`)() as (...args: unknown[]) => unknown;
+}
+
+test('install script parses as a function and runs', () => {
+  const src = buildInstallScript({ mode: 'strict' });
+  const fn = toFunction(src);
   expect(typeof fn).toBe('function');
 });
 
-test('embeds every core pattern source', () => {
-  const src = buildRedactionScript({ mode: 'strict' });
+test('one-line call parses as a function', () => {
+  const src = buildOneLineCall({ mode: 'strict' });
+  const fn = toFunction(src);
+  expect(typeof fn).toBe('function');
+});
+
+test('install script embeds every core pattern source', () => {
+  const src = buildInstallScript({ mode: 'strict' });
   for (const pattern of [
     EMAIL_PATTERN,
     PHONE_ID_PATTERN,
@@ -29,15 +40,15 @@ test('embeds every core pattern source', () => {
   }
 });
 
-test('basic mode script also parses and embeds patterns', () => {
-  const src = buildRedactionScript({ mode: 'basic' });
-  const fn = new Function(`return ${src}`)();
+test('basic mode install script also parses and embeds patterns', () => {
+  const src = buildInstallScript({ mode: 'basic' });
+  const fn = toFunction(src);
   expect(typeof fn).toBe('function');
   expect(src).toContain(JSON.stringify(EMAIL_PATTERN.source));
 });
 
-test('embeds custom selectors and allow list', () => {
-  const src = buildRedactionScript({
+test('install script embeds custom selectors and allow list', () => {
+  const src = buildInstallScript({
     mode: 'strict',
     selectors: ['.my-secret'],
     allow: ['.public-ok'],
@@ -46,7 +57,31 @@ test('embeds custom selectors and allow list', () => {
   expect(src).toContain('.public-ok');
 });
 
-test('embeds the script version', () => {
-  const src = buildRedactionScript({ mode: 'strict' });
+test('install script embeds the script version', () => {
+  const src = buildInstallScript({ mode: 'strict' });
   expect(src).toContain(JSON.stringify(SCRIPT_VERSION));
 });
+
+test('redaction_script returns the one-line call by default and the full script with install:true', () => {
+  const short = buildOneLineCall({ mode: 'strict' });
+  const full = buildInstallScript({ mode: 'strict' });
+  expect(short.length).toBeLessThan(full.length);
+  expect(short).toContain('window.__opendocs');
+  expect(full).toContain('window.__opendocs = { version:');
+});
+
+test('full script is minified (no leading indentation lines)', () => {
+  const full = buildInstallScript({ mode: 'strict' });
+  expect(full.includes('\n')).toBe(false);
+  expect(full.includes('  ')).toBe(false);
+});
+
+test('off mode script still bakes in the target and skips redaction', () => {
+  const src = buildInstallScript({ mode: 'off', target_text: 'Add to cart' });
+  expect(src).toContain('"mode":"off"');
+  expect(src).toContain('"target_text":"Add to cart"');
+});
+
+// No DOM test library (e.g. happy-dom) is a devDependency here, so target-finding
+// and redaction behavior inside a real page are exercised via MCP integration
+// tests (mcp.test.ts) with a hand-built report instead of running the script itself.
