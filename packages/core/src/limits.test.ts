@@ -63,7 +63,7 @@ describe('limits and constants', () => {
   });
 
   test('CLI_MIN_VERSION is semver format', () => {
-    expect(CLI_MIN_VERSION).toBe('0.1.0');
-    expect(/^\d+\.\d+\.\d+$/.test(CLI_MIN_VERSION)).toBe(true);
+    expect(CLI_MIN_VERSION).toBe('0.1.0-alpha.1');
+    expect(/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(CLI_MIN_VERSION)).toBe(true);
   });
 });
