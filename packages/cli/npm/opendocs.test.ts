@@ -7,7 +7,7 @@ describe('platformPackage', () => {
     expect(platformPackage('darwin', 'x64')).toBe('opendocs-cli-darwin-x64');
     expect(platformPackage('linux', 'x64')).toBe('opendocs-cli-linux-x64');
     expect(platformPackage('linux', 'arm64')).toBe('opendocs-cli-linux-arm64');
-    expect(platformPackage('win32', 'x64')).toBe('opendocs-cli-win32-x64');
+    expect(platformPackage('win32', 'x64')).toBe('opendocs-cli-windows-x64');
   });
 
   test('unsupported platform names the package and fails', () => {

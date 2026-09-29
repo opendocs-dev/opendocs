@@ -13,6 +13,8 @@ type Target = {
   os: string;
   cpu: string;
   ext: string;
+  /** Name part when it differs from os: npm spam detection blocks opendocs-cli-win32-x64. */
+  label?: string;
 };
 
 const TARGETS: Target[] = [
@@ -20,7 +22,7 @@ const TARGETS: Target[] = [
   { binTarget: 'bun-linux-arm64', os: 'linux', cpu: 'arm64', ext: '' },
   { binTarget: 'bun-darwin-arm64', os: 'darwin', cpu: 'arm64', ext: '' },
   { binTarget: 'bun-darwin-x64', os: 'darwin', cpu: 'x64', ext: '' },
-  { binTarget: 'bun-windows-x64', os: 'win32', cpu: 'x64', ext: '.exe' },
+  { binTarget: 'bun-windows-x64', os: 'win32', cpu: 'x64', ext: '.exe', label: 'windows' },
 ];
 
 const REPOSITORY = {
@@ -39,7 +41,7 @@ export async function pack(distDir: string, outDir: string, version: string): Pr
   const optionalDependencies: Record<string, string> = {};
 
   for (const t of TARGETS) {
-    const pkgName = `opendocs-cli-${t.os}-${t.cpu}`;
+    const pkgName = `opendocs-cli-${t.label ?? t.os}-${t.cpu}`;
     optionalDependencies[pkgName] = version;
 
     const srcBin = path.join(distDir, `opendocs-${t.binTarget}${t.ext}`);

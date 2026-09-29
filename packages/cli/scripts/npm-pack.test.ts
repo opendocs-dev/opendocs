@@ -44,7 +44,7 @@ describe('pack', () => {
       'opendocs-cli-linux-arm64',
       'opendocs-cli-darwin-arm64',
       'opendocs-cli-darwin-x64',
-      'opendocs-cli-win32-x64',
+      'opendocs-cli-windows-x64',
       'opendocs-cli',
     ];
 
@@ -68,7 +68,7 @@ describe('pack', () => {
       ['opendocs-cli-linux-arm64', 'linux', 'arm64', 'opendocs'],
       ['opendocs-cli-darwin-arm64', 'darwin', 'arm64', 'opendocs'],
       ['opendocs-cli-darwin-x64', 'darwin', 'x64', 'opendocs'],
-      ['opendocs-cli-win32-x64', 'win32', 'x64', 'opendocs.exe'],
+      ['opendocs-cli-windows-x64', 'win32', 'x64', 'opendocs.exe'],
     ];
 
     for (const [name, platform, cpu, binName] of cases) {
@@ -97,7 +97,7 @@ describe('pack', () => {
       'opendocs-cli-darwin-x64': VERSION,
       'opendocs-cli-linux-x64': VERSION,
       'opendocs-cli-linux-arm64': VERSION,
-      'opendocs-cli-win32-x64': VERSION,
+      'opendocs-cli-windows-x64': VERSION,
     });
 
     const launcherJs = path.join(outDir, 'opendocs-cli', 'bin', 'opendocs.js');
