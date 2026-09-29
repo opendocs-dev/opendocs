@@ -26,7 +26,7 @@ import {
 import { canonicalReportSourceLines } from './hash';
 
 /** Bumped whenever the emitted script's behavior changes; travels in the report. */
-export const SCRIPT_VERSION = '5';
+export const SCRIPT_VERSION = '6';
 
 /** Per-call options baked into the emitted script as a JSON literal. */
 export interface RunOptions {
@@ -252,11 +252,36 @@ function coreLines(): string[] {
     '  return best;',
     '}',
 
+    // A cross-origin iframe's contentDocument is either null (spec-compliant browsers)
+    // or throws on access (older/other engines); either way it cannot be redacted or
+    // highlighted inside, so the caller is warned instead of silently missing it.
+    'function countCrossOriginIframesInView() {',
+    '  var count = 0;',
+    '  var iframes = findAllDeep("iframe");',
+    '  for (var i = 0; i < iframes.length; i++) {',
+    '    var rect = iframes[i].getBoundingClientRect();',
+    '    if (rect.width <= 0 || rect.height <= 0) continue;',
+    '    var intersects = rect.right > 0 && rect.left < window.innerWidth && rect.bottom > 0 && rect.top < window.innerHeight;',
+    '    if (!intersects) continue;',
+    '    var readable = true;',
+    '    try {',
+    '      var doc = iframes[i].contentDocument;',
+    '      if (!doc) readable = false;',
+    '    } catch (e) {',
+    '      readable = false;',
+    '    }',
+    '    if (!readable) count++;',
+    '  }',
+    '  return count;',
+    '}',
+
     ...canonicalReportSourceLines(),
 
     'function run(opts) {',
     '  var mode = opts.mode;',
     '  var report = { count: 0, script_version: "' + SCRIPT_VERSION + '", boxes: [] };',
+    '  report.viewport = { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 };',
+    '  report.iframes = countCrossOriginIframesInView();',
     '  if (mode !== "off") {',
     '    var coverSelectors = BUILTIN_COVER_SELECTORS.concat(opts.selectors || []);',
     '    var allowSelectors = opts.allow || [];',
@@ -320,7 +345,7 @@ function coreLines(): string[] {
     '    }',
     '  }',
     '  report.nonce = opts.nonce;',
-    '  report.sig = computeReportSig(opts.nonce, report.count, report.boxes, report.target, report.target_error);',
+    '  report.sig = computeReportSig(opts.nonce, report.count, report.boxes, report.target, report.target_error, report.viewport, report.iframes);',
     '  return report;',
     '}',
 

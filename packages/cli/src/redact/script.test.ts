@@ -130,18 +130,136 @@ test('placeholder attribute is considered when matching target text', () => {
   expect(src).toContain('parts.push(placeholder)');
 });
 
+/** Minimal `document` stub: `querySelectorAll('iframe')` returns `iframes`, everything else `[]`. */
+function makeDocument(iframes: unknown[]) {
+  return { querySelectorAll: (selector: string) => (selector === 'iframe' ? iframes : []) };
+}
+
+/** A fake iframe element with a fixed bounding rect and cross-origin-or-not `contentDocument`. */
+function makeIframe(
+  rect: { top: number; left: number; right: number; bottom: number; width: number; height: number },
+  crossOrigin: boolean
+) {
+  return {
+    getBoundingClientRect: () => rect,
+    get contentDocument(): unknown {
+      if (crossOrigin) throw new Error('cross-origin: blocked');
+      return {};
+    },
+  };
+}
+
 test('report is signed with a nonce and signature computed the same way as the CLI helper', () => {
-  (globalThis as unknown as { window?: unknown }).window = {};
+  (globalThis as unknown as { window?: unknown }).window = { innerWidth: 1280, innerHeight: 800 };
+  (globalThis as unknown as { document?: unknown }).document = makeDocument([]);
   try {
     const src = buildInstallScript({ mode: 'off', nonce: 'test-nonce-1' });
-    const fn = toFunction(src) as () => { nonce: string; sig: string; count: number; boxes: unknown[] };
+    const fn = toFunction(src) as () => {
+      nonce: string;
+      sig: string;
+      count: number;
+      boxes: unknown[];
+      viewport: { w: number; h: number; dpr: number };
+      iframes: number;
+    };
     const report = fn();
     expect(report.nonce).toBe('test-nonce-1');
-    expect(computeReportSig('test-nonce-1', report.count, report.boxes as never, undefined, undefined)).toBe(
-      report.sig
-    );
+    expect(
+      computeReportSig(
+        'test-nonce-1',
+        report.count,
+        report.boxes as never,
+        undefined,
+        undefined,
+        report.viewport,
+        report.iframes
+      )
+    ).toBe(report.sig);
   } finally {
     delete (globalThis as unknown as { window?: unknown }).window;
+    delete (globalThis as unknown as { document?: unknown }).document;
+  }
+});
+
+test('report includes viewport and iframes and the signature covers them', () => {
+  (globalThis as unknown as { window?: unknown }).window = {
+    innerWidth: 1280,
+    innerHeight: 800,
+    devicePixelRatio: 2,
+  };
+  (globalThis as unknown as { document?: unknown }).document = makeDocument([
+    makeIframe({ top: 10, left: 10, right: 110, bottom: 110, width: 100, height: 100 }, true),
+  ]);
+  try {
+    const src = buildInstallScript({ mode: 'off', nonce: 'n-iframe' });
+    const fn = toFunction(src) as () => {
+      sig: string;
+      count: number;
+      boxes: unknown[];
+      viewport: { w: number; h: number; dpr: number };
+      iframes: number;
+    };
+    const report = fn();
+    expect(report.viewport).toEqual({ w: 1280, h: 800, dpr: 2 });
+    expect(report.iframes).toBe(1);
+    expect(
+      computeReportSig(
+        'n-iframe',
+        report.count,
+        report.boxes as never,
+        undefined,
+        undefined,
+        report.viewport,
+        report.iframes
+      )
+    ).toBe(report.sig);
+    // Changing the iframe count changes the signature, proving it is covered.
+    expect(
+      computeReportSig('n-iframe', report.count, report.boxes as never, undefined, undefined, report.viewport, 0)
+    ).not.toBe(report.sig);
+  } finally {
+    delete (globalThis as unknown as { window?: unknown }).window;
+    delete (globalThis as unknown as { document?: unknown }).document;
+  }
+});
+
+test('same-origin iframe (contentDocument readable) is not counted in iframes', () => {
+  (globalThis as unknown as { window?: unknown }).window = {
+    innerWidth: 1280,
+    innerHeight: 800,
+    devicePixelRatio: 1,
+  };
+  (globalThis as unknown as { document?: unknown }).document = makeDocument([
+    makeIframe({ top: 10, left: 10, right: 110, bottom: 110, width: 100, height: 100 }, false),
+  ]);
+  try {
+    const src = buildInstallScript({ mode: 'off', nonce: 'n-same-origin-iframe' });
+    const fn = toFunction(src) as () => { iframes: number };
+    const report = fn();
+    expect(report.iframes).toBe(0);
+  } finally {
+    delete (globalThis as unknown as { window?: unknown }).window;
+    delete (globalThis as unknown as { document?: unknown }).document;
+  }
+});
+
+test('0x0 iframe ignored', () => {
+  (globalThis as unknown as { window?: unknown }).window = {
+    innerWidth: 1280,
+    innerHeight: 800,
+    devicePixelRatio: 1,
+  };
+  (globalThis as unknown as { document?: unknown }).document = makeDocument([
+    makeIframe({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }, true),
+  ]);
+  try {
+    const src = buildInstallScript({ mode: 'off', nonce: 'n-zero-iframe' });
+    const fn = toFunction(src) as () => { iframes: number };
+    const report = fn();
+    expect(report.iframes).toBe(0);
+  } finally {
+    delete (globalThis as unknown as { window?: unknown }).window;
+    delete (globalThis as unknown as { document?: unknown }).document;
   }
 });
 

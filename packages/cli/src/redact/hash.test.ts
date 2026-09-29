@@ -14,7 +14,7 @@ test('roundTo2 rounds to 2 decimal places', () => {
 });
 
 test('canonicalReportString with no boxes and no target', () => {
-  expect(canonicalReportString('nonce-1', 0, [], undefined, undefined)).toBe('nonce-1|0|[]|none|');
+  expect(canonicalReportString('nonce-1', 0, [], undefined, undefined)).toBe('nonce-1|0|[]|none||none|0');
 });
 
 test('canonicalReportString with boxes and a target', () => {
@@ -22,23 +22,32 @@ test('canonicalReportString with boxes and a target', () => {
   const target = { x: 494, y: 154, w: 292, h: 37, vw: 1280, vh: 800, sx: 0, sy: 0 };
   expect(canonicalReportString('abc-nonce', 1, boxes, target, undefined)).toBe(
     'abc-nonce|1|[{"x":494,"y":154,"w":292,"h":37}]|' +
-      '{"x":494,"y":154,"w":292,"h":37,"vw":1280,"vh":800,"sx":0,"sy":0}|'
+      '{"x":494,"y":154,"w":292,"h":37,"vw":1280,"vh":800,"sx":0,"sy":0}||none|0'
   );
 });
 
 test('canonicalReportString rounds every field to 2 decimals', () => {
   const boxes = [{ x: 1.005, y: 2, w: 3, h: 4 }];
   expect(canonicalReportString('xyz', 2, boxes, undefined, 'not found: X')).toBe(
-    'xyz|2|[{"x":1,"y":2,"w":3,"h":4}]|none|not found: X'
+    'xyz|2|[{"x":1,"y":2,"w":3,"h":4}]|none|not found: X|none|0'
+  );
+});
+
+test('canonicalReportString includes viewport and iframes when given', () => {
+  const viewport = { w: 1280, h: 800, dpr: 2 };
+  expect(canonicalReportString('vp-nonce', 0, [], undefined, undefined, viewport, 3)).toBe(
+    'vp-nonce|0|[]|none||{"w":1280,"h":800,"dpr":2}|3'
   );
 });
 
 test('computeReportSig matches known vectors', () => {
-  expect(computeReportSig('nonce-1', 0, [], undefined, undefined)).toBe('3a3ddaf8');
+  expect(computeReportSig('nonce-1', 0, [], undefined, undefined)).toBe('c3b39d52');
   const boxes = [{ x: 494, y: 154, w: 292, h: 37 }];
   const target = { x: 494, y: 154, w: 292, h: 37, vw: 1280, vh: 800, sx: 0, sy: 0 };
-  expect(computeReportSig('abc-nonce', 1, boxes, target, undefined)).toBe('179e2bf5');
-  expect(computeReportSig('xyz', 2, [{ x: 1.005, y: 2, w: 3, h: 4 }], undefined, 'not found: X')).toBe('543e5d8f');
+  expect(computeReportSig('abc-nonce', 1, boxes, target, undefined)).toBe('f8e46a89');
+  expect(computeReportSig('xyz', 2, [{ x: 1.005, y: 2, w: 3, h: 4 }], undefined, 'not found: X')).toBe('1a66967b');
+  const viewport = { w: 1280, h: 800, dpr: 2 };
+  expect(computeReportSig('vp-nonce', 0, [], undefined, undefined, viewport, 3)).toBe('ad33824a');
 });
 
 test('computeReportSig changes if any input changes', () => {
@@ -46,6 +55,12 @@ test('computeReportSig changes if any input changes', () => {
   expect(computeReportSig('nonce-2', 1, [{ x: 1, y: 2, w: 3, h: 4 }], undefined, undefined)).not.toBe(base);
   expect(computeReportSig('nonce-1', 2, [{ x: 1, y: 2, w: 3, h: 4 }], undefined, undefined)).not.toBe(base);
   expect(computeReportSig('nonce-1', 1, [{ x: 9, y: 2, w: 3, h: 4 }], undefined, undefined)).not.toBe(base);
+  expect(
+    computeReportSig('nonce-1', 1, [{ x: 1, y: 2, w: 3, h: 4 }], undefined, undefined, { w: 1280, h: 800, dpr: 1 })
+  ).not.toBe(base);
+  expect(computeReportSig('nonce-1', 1, [{ x: 1, y: 2, w: 3, h: 4 }], undefined, undefined, undefined, 1)).not.toBe(
+    base
+  );
 });
 
 test('emitted source implements the same algorithm as the TS helper', () => {

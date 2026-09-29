@@ -12,6 +12,7 @@ import {
   CreateRunResponseSchema,
   DeleteFlowParamsSchema,
   DocStepImageSchema,
+  DocStepSchema,
   ERROR_CODES,
   ErrorCodeSchema,
   ErrorResponseSchema,
@@ -21,9 +22,11 @@ import {
   ListFlowsQuerySchema,
   ListFlowsResponseSchema,
   MeResponseSchema,
+  RedactionReportSchema,
   V1_ROUTE_SCHEMAS,
   V1_ROUTES,
 } from './contract';
+import { STEP_ALT_MAX, STEP_TITLE_MAX } from './limits';
 
 describe('API v1 contract', () => {
   test('exports a schema for every v1 route', () => {
@@ -216,6 +219,65 @@ describe('API v1 contract', () => {
     expect(Value.Check(AddStepBodySchema, validStep)).toBe(true);
 
     expect(Value.Check(AddStepResponseSchema, { order: 1 })).toBe(true);
+  });
+
+  test('AddStepBodySchema accepts optional title and alt within caps', () => {
+    const base = {
+      asset_id: 'asset_123',
+      action: 'click',
+      instruction: 'Click Submit',
+    };
+    expect(Value.Check(AddStepBodySchema, { ...base, title: 'Open Isi Saldo' })).toBe(true);
+    expect(Value.Check(AddStepBodySchema, { ...base, alt: 'The balance page showing the top-up button.' })).toBe(
+      true
+    );
+    expect(Value.Check(AddStepBodySchema, { ...base, title: 'x'.repeat(STEP_TITLE_MAX) })).toBe(true);
+    expect(Value.Check(AddStepBodySchema, { ...base, alt: 'x'.repeat(STEP_ALT_MAX) })).toBe(true);
+  });
+
+  test('AddStepBodySchema rejects title/alt over the cap or empty', () => {
+    const base = {
+      asset_id: 'asset_123',
+      action: 'click',
+      instruction: 'Click Submit',
+    };
+    expect(Value.Check(AddStepBodySchema, { ...base, title: 'x'.repeat(STEP_TITLE_MAX + 1) })).toBe(false);
+    expect(Value.Check(AddStepBodySchema, { ...base, alt: 'x'.repeat(STEP_ALT_MAX + 1) })).toBe(false);
+    expect(Value.Check(AddStepBodySchema, { ...base, title: '' })).toBe(false);
+    expect(Value.Check(AddStepBodySchema, { ...base, alt: '' })).toBe(false);
+  });
+
+  test('RedactionReportSchema accepts optional viewport and iframes', () => {
+    expect(
+      Value.Check(RedactionReportSchema, {
+        count: 0,
+        script_version: '6',
+        viewport: { w: 1280, h: 800, dpr: 2 },
+        iframes: 1,
+      })
+    ).toBe(true);
+    expect(Value.Check(RedactionReportSchema, { count: 0, script_version: '6' })).toBe(true);
+    expect(
+      Value.Check(RedactionReportSchema, {
+        count: 0,
+        script_version: '6',
+        viewport: { w: 1280, h: 800 },
+      })
+    ).toBe(false);
+  });
+
+  test('DocStepSchema accepts optional title, alt, viewport and iframes', () => {
+    const validDocStep = {
+      order: 1,
+      action: 'click',
+      instruction: 'Click Start',
+      title: 'Open Isi Saldo',
+      alt: 'The home screen with the Isi Saldo button visible.',
+      image: { url: 'https://i.opendocs.juniyadi.id/i/asset123', expired: false },
+      viewport: { w: 1280, h: 800, dpr: 2 },
+      iframes: 0,
+    };
+    expect(Value.Check(DocStepSchema, validDocStep)).toBe(true);
   });
 
   test('validates POST /api/v1/runs/{id}/compile request and response', () => {

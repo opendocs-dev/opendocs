@@ -93,6 +93,8 @@ interface ReportFields {
   boxes?: Array<{ x: number; y: number; w: number; h: number }>;
   target?: { x: number; y: number; w: number; h: number; vw: number; vh: number; sx: number; sy: number };
   target_error?: string;
+  viewport?: { w: number; h: number; dpr: number };
+  iframes?: number;
 }
 
 /** Build a `redaction_report` signed for `nonce`, as the real script would return. */
@@ -101,13 +103,17 @@ function signedReport(nonce: string, fields: ReportFields = {}) {
   const boxes = fields.boxes;
   const target = fields.target;
   const targetError = fields.target_error;
-  const sig = computeReportSig(nonce, count, boxes, target, targetError);
+  const viewport = fields.viewport;
+  const iframes = fields.iframes;
+  const sig = computeReportSig(nonce, count, boxes, target, targetError, viewport, iframes);
   return {
     count,
-    script_version: '4',
+    script_version: '6',
     ...(boxes !== undefined ? { boxes } : {}),
     ...(target !== undefined ? { target } : {}),
     ...(targetError !== undefined ? { target_error: targetError } : {}),
+    ...(viewport !== undefined ? { viewport } : {}),
+    ...(iframes !== undefined ? { iframes } : {}),
     nonce,
     sig,
   };
@@ -322,8 +328,52 @@ test('first step without session_id creates a run', async () => {
   const content = result.content as Array<{ type: string; text: string }>;
   expect(sawCreateRun).toBe(true);
   expect(content[0]!.text).toBe(
-    'step 1 recorded, session_id=run_new. Next: next step, or opendocs_compile when done.'
+    'step 1 recorded, session_id=run_new. Next: next step, or opendocs_compile when done. ' +
+      'add title and alt next time.'
   );
+});
+
+test('run_title on the first step goes to createRun, not the step; step title stays on the step', async () => {
+  let runBody: unknown;
+  let stepBody: unknown;
+  const fetchImpl = routedFetch({
+    runs: (init) => {
+      runBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ session_id: 'run_new' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      stepBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      title: 'Open Isi Saldo',
+      run_title: 'Isi Saldo Guide',
+      action: 'click',
+      redact: 'off',
+    },
+  });
+
+  expect((runBody as { title?: string }).title).toBe('Isi Saldo Guide');
+  expect((stepBody as { title?: string }).title).toBe('Open Isi Saldo');
+  expect((stepBody as Record<string, unknown>).run_title).toBeUndefined();
 });
 
 test('response notes masked count when PII found', async () => {
@@ -359,7 +409,8 @@ test('response notes masked count when PII found', async () => {
   expect((sentBody as { instruction: string }).instruction).toContain('[email]');
   expect((sentBody as { instruction: string }).instruction).not.toContain('jane.doe@example.com');
   expect(content[0]!.text).toBe(
-    'step 1 recorded, session_id=run_1, masked=1. Next: next step, or opendocs_compile when done.'
+    'step 1 recorded, session_id=run_1, masked=1. Next: next step, or opendocs_compile when done. ' +
+      'add title and alt next time.'
   );
 });
 
@@ -395,7 +446,8 @@ test('response omits the note when none found', async () => {
   const content = result.content as Array<{ type: string; text: string }>;
   expect((sentBody as { instruction: string }).instruction).toBe('Click the blue submit button');
   expect(content[0]!.text).toBe(
-    'step 1 recorded, session_id=run_1. Next: next step, or opendocs_compile when done.'
+    'step 1 recorded, session_id=run_1. Next: next step, or opendocs_compile when done. ' +
+      'add title and alt next time.'
   );
 });
 
@@ -456,7 +508,7 @@ test('rejects bad arguments with one-line errors and no API call', async () => {
         file_path: imagePath,
         instruction: 'x',
         action: 'click',
-        redaction_report: { count: 'nope', script_version: '4', nonce: 'n', sig: 's' },
+        redaction_report: { count: 'nope', script_version: '6', nonce: 'n', sig: 's' },
       },
     },
     { name: 'opendocs_snap', arguments: { file_path: imagePath, ttl: '2d' } },
@@ -542,7 +594,7 @@ test('step forwards the report and mode', async () => {
   });
 
   expect(sentBody).toMatchObject({
-    redaction: { mode: 'basic', report: { count: 2, script_version: '4' } },
+    redaction: { mode: 'basic', report: { count: 2, script_version: '6' } },
   });
 });
 
@@ -950,7 +1002,13 @@ test('target and target_error are stripped from the report before sending to the
   });
 
   const report = (sentBody as { redaction: { report?: Record<string, unknown> } }).redaction.report;
-  expect(report).toEqual({ count: 0, script_version: '4', boxes: undefined });
+  expect(report).toEqual({
+    count: 0,
+    script_version: '6',
+    boxes: undefined,
+    viewport: undefined,
+    iframes: undefined,
+  });
   expect(report?.target).toBeUndefined();
   expect(report?.target_error).toBeUndefined();
 });
@@ -985,7 +1043,8 @@ test('step result says no highlight with the reason when target_error is set', a
 
   const text = (result.content as Array<{ text: string }>)[0]!.text;
   expect(text).toBe(
-    'step 1 recorded, session_id=run_1, no highlight (target outside the viewport). Next: next step, or opendocs_compile when done.'
+    'step 1 recorded, session_id=run_1, no highlight (target outside the viewport). ' +
+      'Next: next step, or opendocs_compile when done. add title and alt next time.'
   );
 });
 
@@ -1026,7 +1085,8 @@ test('step result says no highlight when a target box clamps to zero area', asyn
 
   const text = (result.content as Array<{ text: string }>)[0]!.text;
   expect(text).toBe(
-    'step 1 recorded, session_id=run_1, no highlight (target outside the screenshot). Next: next step, or opendocs_compile when done.'
+    'step 1 recorded, session_id=run_1, no highlight (target outside the screenshot). ' +
+      'Next: next step, or opendocs_compile when done. add title and alt next time.'
   );
 });
 
@@ -1061,4 +1121,291 @@ test('no-highlight step result stays within the token cap', async () => {
 
   const text = (result.content as Array<{ text: string }>)[0]!.text;
   expect(estimatedTokens(text)).toBeLessThanOrEqual(50);
+});
+
+test('title and alt are masked and forwarded', async () => {
+  let sentBody: unknown;
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      sentBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const email = ['someone', 'example.com'].join('@');
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      title: 'Open Isi Saldo',
+      alt: `Screen showing ${email} in the header`,
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+
+  expect((sentBody as { title: string }).title).toBe('Open Isi Saldo');
+  expect((sentBody as { alt: string }).alt).toContain('[email]');
+  expect((sentBody as { alt: string }).alt).not.toContain(email);
+});
+
+test('over-cap title rejected before upload', async () => {
+  let calls = 0;
+  const fetchImpl: FetchLike = async () => {
+    calls += 1;
+    return new Response('{}', { status: 500 });
+  };
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      title: 'x'.repeat(61),
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+
+  const content = result.content as Array<{ type: string; text: string }>;
+  expect(result.isError).toBe(true);
+  expect(content[0]!.text).toContain('title must be at most 60 chars');
+  expect(calls).toBe(0);
+});
+
+test('over-cap alt rejected before upload', async () => {
+  let calls = 0;
+  const fetchImpl: FetchLike = async () => {
+    calls += 1;
+    return new Response('{}', { status: 500 });
+  };
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      alt: 'x'.repeat(301),
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+
+  const content = result.content as Array<{ type: string; text: string }>;
+  expect(result.isError).toBe(true);
+  expect(content[0]!.text).toContain('alt must be at most 300 chars');
+  expect(calls).toBe(0);
+});
+
+test('missing title/alt nudges say exactly what is missing, present title and alt do not nudge', async () => {
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: () =>
+      new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const withTitleAndAlt = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      title: 'Open Isi Saldo',
+      alt: 'The home screen showing the balance button.',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+  const withTitleAndAltText = (withTitleAndAlt.content as Array<{ text: string }>)[0]!.text;
+  expect(withTitleAndAltText).not.toContain('add title');
+  expect(withTitleAndAltText).not.toContain('add alt');
+
+  const withoutTitle = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      alt: 'The home screen showing the balance button.',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+  const withoutTitleText = (withoutTitle.content as Array<{ text: string }>)[0]!.text;
+  expect(withoutTitleText).toContain('add title next time');
+  expect(withoutTitleText).not.toContain('add alt');
+  expect(withoutTitleText).not.toContain('add title and alt');
+
+  const withoutAlt = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      title: 'Open Isi Saldo',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+  const withoutAltText = (withoutAlt.content as Array<{ text: string }>)[0]!.text;
+  expect(withoutAltText).toContain('add alt next time');
+  expect(withoutAltText).not.toContain('add title next time');
+  expect(withoutAltText).not.toContain('add title and alt');
+
+  const withoutBoth = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+    },
+  });
+  const withoutBothText = (withoutBoth.content as Array<{ text: string }>)[0]!.text;
+  expect(withoutBothText).toContain('add title and alt next time');
+});
+
+test('wide viewport adds the resize hint', async () => {
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: () =>
+      new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      title: 'Open Isi Saldo',
+      alt: 'The home screen showing the balance button.',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: signedReport(nonce, { viewport: { w: 1920, h: 1080, dpr: 1 } }),
+    },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toContain('page is 1920px wide: resize the viewport to 1280x800 before the next step');
+});
+
+test('1280 wide adds no hint', async () => {
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: () =>
+      new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      title: 'Open Isi Saldo',
+      alt: 'The home screen showing the balance button.',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: signedReport(nonce, { viewport: { w: 1280, h: 800, dpr: 2 } }),
+    },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).not.toContain('resize the viewport');
+});
+
+test('iframe line in the step result', async () => {
+  const fetchImpl = routedFetch({
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: () =>
+      new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      title: 'Open Isi Saldo',
+      alt: 'The home screen showing the balance button.',
+      action: 'click',
+      session_id: 'run_1',
+      redact: 'off',
+      redaction_report: signedReport(nonce, { viewport: { w: 1280, h: 800, dpr: 2 }, iframes: 2 }),
+    },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toContain('2 cross-origin iframe(s) on screen: not redacted, no highlight inside');
+});
+
+test('opendocs_snap gets the same viewport and iframe lines', async () => {
+  const fetchImpl = stubFetch({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }, 200);
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+  const nonce = await issueNonce(client);
+
+  const result = await client.callTool({
+    name: 'opendocs_snap',
+    arguments: {
+      file_path: imagePath,
+      redact: 'off',
+      redaction_report: signedReport(nonce, { viewport: { w: 1920, h: 1080, dpr: 1 }, iframes: 1 }),
+    },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toContain('page is 1920px wide: resize the viewport to 1280x800 before the next step');
+  expect(text).toContain('1 cross-origin iframe(s) on screen: not redacted, no highlight inside');
 });

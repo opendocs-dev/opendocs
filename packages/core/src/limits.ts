@@ -61,3 +61,9 @@ export const PUBLIC_ID_LENGTH = 16 as const;
 
 /** Minimum accepted CLI version (semver). A prerelease sorts below its release, so the alpha needs its own floor. */
 export const CLI_MIN_VERSION = '0.1.0-alpha.1' as const;
+
+/** Max length of a step's optional short title (C8-AC01). */
+export const STEP_TITLE_MAX = 60 as const;
+
+/** Max length of a step's optional alt text (C8-AC01). */
+export const STEP_ALT_MAX = 300 as const;
