@@ -9,7 +9,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { AddStepBody, Box, RedactionReport } from '@opendocs/core/contract';
-import { SNAP_TTL_VALUES, type SnapTtl } from '@opendocs/core/limits';
+import { SNAP_TTL_VALUES, STEP_ALT_MAX, STEP_TITLE_MAX, type SnapTtl } from '@opendocs/core/limits';
 import type { ApiFailureKind, FetchLike } from './api';
 import { addStep, compileRun, createRun, uploadAsset } from './api';
 import { readCredentials } from './config';
@@ -66,13 +66,14 @@ const NOT_LOGGED_IN = 'not logged in: run opendocs login --key <key>';
 
 /** Sent to the client on initialize; kept under ~2200 chars. */
 const SERVER_INSTRUCTIONS = `Recording a walkthrough: plan the steps first. One UI action per step - opening a menu, tab, dropdown, or dialog is its own step (screenshot it still closed, target = the control that opens it), and choosing the item inside is the next step; never write "click X, then Y" in one step. Only plan a path a reader can do in the UI - never navigate by editing the URL or adding query params; if the UI needs a view switch (e.g. mobile to desktop), that switch is a step with its own target.
+Before step 1 set the browser viewport to 1280x800: chrome-devtools-mcp emulate viewport "1280x800x2" (or resize_page), Playwright MCP browser_resize(1280, 800).
 Then for EACH step, in this exact order:
-1. Call opendocs_redaction_script with target_text (the visible label of the element you are about to click/type into) or target_selector. After every page load or navigation, call it with install:true directly - don't probe first. On later steps on the same page, use the default one-line call.
-2. Run the returned function in the page with your browser evaluate tool. If it evaluates to {installed:false}, call opendocs_redaction_script again with install:true, run THAT, then continue.
-3. Take a VIEWPORT screenshot (not full-page) and save it to a file your browser tool can write. Keep the section heading visible if it fits - the script scrolls the minimum needed, or not at all if the target is already visible.
-4. Call opendocs_step with file_path, instruction (imperative, what the reader does, e.g. "Click **Add to cart**" - bold the exact visible label), action, page_url, and redaction_report exactly as returned by the script - never edit it, and never construct one yourself; there is no box parameter, the highlight comes only from the report's target.
-5. THEN perform the click/type/navigation. Never screenshot after acting; the screenshot must show the page BEFORE the action.
-Reuse the session_id from the first step's result on every later step. A final result step (e.g. a confirmation page) can omit target_text/target_selector. After the LAST step, ALWAYS call opendocs_compile with session_id and a title, then give the user the URL - never stop before compiling. Never type real secrets into forms; redaction covers password fields for you.`;
+1. Call opendocs_redaction_script with target_text (visible label of the element you are about to act on) or target_selector. After every page load or navigation, call it with install:true directly - don't probe first. On later steps on the same page, use the default one-line call.
+2. Run the returned function with your browser evaluate tool. If it evaluates to {installed:false}, call opendocs_redaction_script again with install:true, run THAT, then continue.
+3. Take a VIEWPORT screenshot (not full-page). Keep the section heading visible if it fits - the script scrolls minimally, or not at all if already visible.
+4. Call opendocs_step with file_path, instruction (imperative, e.g. "Click **Add to cart**" - bold the exact visible label), title (short step title, e.g. "Open Isi Saldo"), alt (what the screenshot shows, 1-2 sentences), action, page_url, and redaction_report exactly as returned - never edit it, never build one yourself; the highlight comes only from the report's target.
+5. THEN perform the click/type/navigation. Never screenshot after acting; it must show the page BEFORE the action.
+Reuse the session_id from the first step's result on every later step; run_title names the whole guide, not the step. A final result step can omit target_text/target_selector. After the LAST step, ALWAYS call opendocs_compile with session_id and a title, then give the user the URL - never stop before compiling. Never type real secrets into forms; redaction covers password fields for you.`;
 
 const REDACT_MODE_VALUES = ['strict', 'basic', 'off'] as const;
 
@@ -106,6 +107,18 @@ const TARGET_INPUT_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+const VIEWPORT_INPUT_SCHEMA = {
+  type: 'object',
+  description: 'Browser viewport size and pixel ratio at capture time, as returned.',
+  properties: {
+    w: { type: 'number', description: 'Viewport width, CSS px.' },
+    h: { type: 'number', description: 'Viewport height, CSS px.' },
+    dpr: { type: 'number', description: 'Device pixel ratio.' },
+  },
+  required: ['w', 'h', 'dpr'],
+  additionalProperties: false,
+} as const;
+
 const REDACTION_REPORT_INPUT_SCHEMA = {
   type: 'object',
   description:
@@ -121,6 +134,11 @@ const REDACTION_REPORT_INPUT_SCHEMA = {
     },
     target: { ...TARGET_INPUT_SCHEMA, description: 'The located target, if target_selector/target_text was set.' },
     target_error: { type: 'string', description: 'Set instead of target when the target was not found.' },
+    viewport: VIEWPORT_INPUT_SCHEMA,
+    iframes: {
+      type: 'number',
+      description: 'Count of cross-origin iframes intersecting the viewport, not redacted.',
+    },
     nonce: { type: 'string', description: "The script's anti-tampering nonce, as returned." },
     sig: { type: 'string', description: "The script's signature over the report, as returned." },
   },
@@ -152,6 +170,14 @@ const STEP_INPUT_SCHEMA = {
       type: 'string',
       description: 'Imperative instruction describing what the reader does, e.g. "Click **Add to cart**".',
     },
+    title: {
+      type: 'string',
+      description: `Short step title, max ${STEP_TITLE_MAX} chars, e.g. "Open Isi Saldo".`,
+    },
+    alt: {
+      type: 'string',
+      description: `What the screenshot shows, 1-2 sentences, max ${STEP_ALT_MAX} chars; used as image alt text.`,
+    },
     action: {
       type: 'string',
       enum: ['click', 'type', 'navigate', 'other'],
@@ -163,7 +189,7 @@ const STEP_INPUT_SCHEMA = {
       type: 'string',
       description: 'Omit on the first step; a new run is created. Reuse the returned session_id on every later step.',
     },
-    title: { type: 'string', description: 'Optional run title; only used when this call creates the run.' },
+    run_title: { type: 'string', description: 'Optional run title; only used when this call creates the run.' },
     redact: {
       type: 'string',
       enum: [...REDACT_MODE_VALUES],
@@ -237,6 +263,22 @@ export interface ParsedRedactionReport extends RedactionReport {
   sig: string;
 }
 
+/** Viewport shape carried on a {@link ParsedRedactionReport}. */
+type ParsedViewport = NonNullable<ParsedRedactionReport['viewport']>;
+
+/** Validate a `redaction_report.viewport` field, or return a one-line error. */
+function parseViewport(value: unknown): { w: number; h: number; dpr: number } | undefined | string {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null) return 'redaction_report.viewport must be an object';
+  const v = value as Record<string, unknown>;
+  for (const key of ['w', 'h', 'dpr'] as const) {
+    if (typeof v[key] !== 'number' || !Number.isFinite(v[key])) {
+      return `redaction_report.viewport.${key} must be a finite number`;
+    }
+  }
+  return { w: v.w as number, h: v.h as number, dpr: v.dpr as number };
+}
+
 /** Validate a `redaction_report.target` field, or return a one-line error. */
 function parseTargetRect(value: unknown): TargetRect | undefined | string {
   if (value === undefined) return undefined;
@@ -280,6 +322,11 @@ function parseRedactionReport(value: unknown): ParsedRedactionReport | undefined
   if (r.target_error !== undefined && typeof r.target_error !== 'string') {
     return 'redaction_report.target_error must be a string';
   }
+  const viewport = parseViewport(r.viewport);
+  if (typeof viewport === 'string') return viewport;
+  if (r.iframes !== undefined && (typeof r.iframes !== 'number' || !Number.isFinite(r.iframes))) {
+    return 'redaction_report.iframes must be a number';
+  }
   if (typeof r.nonce !== 'string' || r.nonce.length === 0) return REPORT_TAMPER_MESSAGE;
   if (typeof r.sig !== 'string' || r.sig.length === 0) return REPORT_TAMPER_MESSAGE;
   return {
@@ -288,6 +335,8 @@ function parseRedactionReport(value: unknown): ParsedRedactionReport | undefined
     boxes: r.boxes as Box[] | undefined,
     target,
     target_error: r.target_error as string | undefined,
+    viewport,
+    iframes: r.iframes as number | undefined,
     nonce: r.nonce,
     sig: r.sig,
   };
@@ -305,7 +354,15 @@ const REPORT_TAMPER_MESSAGE =
  */
 function verifyReport(report: ParsedRedactionReport, store: NonceStore): string | undefined {
   if (!store.isValid(report.nonce)) return REPORT_TAMPER_MESSAGE;
-  const expectedSig = computeReportSig(report.nonce, report.count, report.boxes, report.target, report.target_error);
+  const expectedSig = computeReportSig(
+    report.nonce,
+    report.count,
+    report.boxes,
+    report.target,
+    report.target_error,
+    report.viewport,
+    report.iframes
+  );
   if (expectedSig !== report.sig) return REPORT_TAMPER_MESSAGE;
   store.consume(report.nonce);
   return undefined;
@@ -313,7 +370,13 @@ function verifyReport(report: ParsedRedactionReport, store: NonceStore): string 
 
 /** Strip the browser-side fields the API's redaction schema doesn't know about. */
 function stripTarget(report: ParsedRedactionReport): RedactionReport {
-  return { count: report.count, script_version: report.script_version, boxes: report.boxes };
+  return {
+    count: report.count,
+    script_version: report.script_version,
+    boxes: report.boxes,
+    viewport: report.viewport,
+    iframes: report.iframes,
+  };
 }
 
 interface SnapArgs {
@@ -360,11 +423,13 @@ type StepAction = (typeof STEP_ACTIONS)[number];
 interface StepArgs {
   file_path: string;
   instruction: string;
+  title?: string;
+  alt?: string;
   action: StepAction;
   selector?: string;
   page_url?: string;
   session_id?: string;
-  title?: string;
+  run_title?: string;
   redact?: RedactMode;
   redaction_report?: ParsedRedactionReport;
 }
@@ -381,7 +446,15 @@ function parseStepArgs(args: unknown): StepArgs | string {
   if (a.selector !== undefined && typeof a.selector !== 'string') return 'selector must be a string';
   if (a.page_url !== undefined && typeof a.page_url !== 'string') return 'page_url must be a string';
   if (a.session_id !== undefined && typeof a.session_id !== 'string') return 'session_id must be a string';
-  if (a.title !== undefined && typeof a.title !== 'string') return 'title must be a string';
+  if (a.run_title !== undefined && typeof a.run_title !== 'string') return 'run_title must be a string';
+  if (a.title !== undefined) {
+    if (typeof a.title !== 'string' || a.title.length === 0) return 'title must be a non-empty string';
+    if (a.title.length > STEP_TITLE_MAX) return `title must be at most ${STEP_TITLE_MAX} chars`;
+  }
+  if (a.alt !== undefined) {
+    if (typeof a.alt !== 'string' || a.alt.length === 0) return 'alt must be a non-empty string';
+    if (a.alt.length > STEP_ALT_MAX) return `alt must be at most ${STEP_ALT_MAX} chars`;
+  }
   const redact = parseRedact(a.redact);
   if (typeof redact === 'string') return redact;
   const redactionReport = parseRedactionReport(a.redaction_report);
@@ -389,11 +462,13 @@ function parseStepArgs(args: unknown): StepArgs | string {
   return {
     file_path: a.file_path,
     instruction: a.instruction,
+    title: a.title as string | undefined,
+    alt: a.alt as string | undefined,
     action: a.action as StepAction,
     selector: a.selector as string | undefined,
     page_url: a.page_url as string | undefined,
     session_id: a.session_id as string | undefined,
-    title: a.title as string | undefined,
+    run_title: a.run_title as string | undefined,
     redact: redact.value,
     redaction_report: redactionReport,
   };
@@ -453,7 +528,8 @@ async function handleSnap(
   const uploaded = await uploadImage(parsed.file_path, key, 'snap', parsed.ttl, fetchImpl);
   if (!uploaded.ok) return textResult(mapApiError(uploaded), true);
 
-  return textResult(`${uploaded.data.url} expires ${uploaded.data.expires_at}`);
+  const nudge = nudgeLines(false, false, parsed.redaction_report);
+  return textResult(`${uploaded.data.url} expires ${uploaded.data.expires_at}${nudge}`);
 }
 
 async function handleStep(
@@ -483,11 +559,13 @@ async function handleStep(
   }
 
   const maskedInstruction = maskStepText(parsed.instruction);
+  const maskedStepTitle = parsed.title !== undefined ? maskStepText(parsed.title).text : undefined;
+  const maskedAlt = parsed.alt !== undefined ? maskStepText(parsed.alt).text : undefined;
 
   let sessionId = parsed.session_id;
   if (!sessionId) {
-    const maskedTitle = parsed.title !== undefined ? maskStepText(parsed.title).text : undefined;
-    const run = await createRun(key, maskedTitle, fetchImpl);
+    const maskedRunTitle = parsed.run_title !== undefined ? maskStepText(parsed.run_title).text : undefined;
+    const run = await createRun(key, maskedRunTitle, fetchImpl);
     if (!run.ok) return textResult(mapApiError(run), true);
     sessionId = run.data.session_id;
   }
@@ -517,6 +595,8 @@ async function handleStep(
     asset_id: uploaded.data.id,
     action: parsed.action,
     instruction: maskedInstruction.text,
+    title: maskedStepTitle,
+    alt: maskedAlt,
     selector: parsed.selector,
     box,
     page_url: parsed.page_url,
@@ -531,15 +611,39 @@ async function handleStep(
 
   const maskedNote = maskedInstruction.count > 0 ? `, masked=${maskedInstruction.count}` : '';
   const highlightNote = noHighlightReason ? `, no highlight (${shortenReason(noHighlightReason)})` : '';
+  const nudge = nudgeLines(maskedStepTitle === undefined, maskedAlt === undefined, parsed.redaction_report);
   return textResult(
     `step ${step.data.order} recorded, session_id=${sessionId}${maskedNote}${highlightNote}. ` +
-      'Next: next step, or opendocs_compile when done.'
+      `Next: next step, or opendocs_compile when done.${nudge}`
   );
 }
 
 /** Keep a no-highlight reason short enough that the step result stays within the 50-token cap. */
 function shortenReason(reason: string): string {
   return reason.length > 60 ? `${reason.slice(0, 59)}…` : reason;
+}
+
+/**
+ * One-line nudges appended to a step/snap result, in order and only when true:
+ * missing title/alt (naming exactly which is missing), an over-wide viewport, and
+ * cross-origin iframes on screen.
+ */
+function nudgeLines(
+  missingTitle: boolean,
+  missingAlt: boolean,
+  report: { viewport?: ParsedViewport; iframes?: number } | undefined
+): string {
+  const lines: string[] = [];
+  if (missingTitle && missingAlt) lines.push('add title and alt next time');
+  else if (missingTitle) lines.push('add title next time');
+  else if (missingAlt) lines.push('add alt next time');
+  if (report?.viewport !== undefined && report.viewport.w > 1280) {
+    lines.push(`page is ${report.viewport.w}px wide: resize the viewport to 1280x800 before the next step`);
+  }
+  if (report?.iframes !== undefined && report.iframes > 0) {
+    lines.push(`${report.iframes} cross-origin iframe(s) on screen: not redacted, no highlight inside`);
+  }
+  return lines.length > 0 ? ` ${lines.join('. ')}.` : '';
 }
 
 async function handleCompile(
