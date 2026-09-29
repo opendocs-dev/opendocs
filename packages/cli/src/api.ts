@@ -16,7 +16,7 @@ import type {
 import type { SnapTtl } from '@opendocs/core/limits';
 import pkg from '../package.json' with { type: 'json' };
 
-const DEFAULT_API_URL = 'https://opendocs.juniyadi.id/api/v1';
+const DEFAULT_API_URL = 'https://opendocs.tunnel.juniyadi.id/api/v1';
 
 /** How a request failed, in the terms the CLI reports to the user. */
 export type ApiFailureKind = 'unauthorized' | 'upgrade' | 'network' | 'error';
