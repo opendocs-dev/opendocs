@@ -62,12 +62,13 @@ function mapApiError(result: { kind: ApiFailureKind; message: string }): string 
 
 const NOT_LOGGED_IN = 'not logged in: run opendocs login --key <key>';
 
-/** Sent to the client on initialize; kept under ~1800 chars. */
-const SERVER_INSTRUCTIONS = `Recording a walkthrough: plan the steps first, then for EACH step, in this exact order:
-1. Call opendocs_redaction_script with target_text (the visible label of the element you are about to click/type into) or target_selector.
+/** Sent to the client on initialize; kept under ~2200 chars. */
+const SERVER_INSTRUCTIONS = `Recording a walkthrough: plan the steps first. One UI action per step - opening a menu, tab, dropdown, or dialog is its own step (screenshot it still closed, target = the control that opens it), and choosing the item inside is the next step; never write "click X, then Y" in one step. Only plan a path a reader can do in the UI - never navigate by editing the URL or adding query params; if the UI needs a view switch (e.g. mobile to desktop), that switch is a step with its own target.
+Then for EACH step, in this exact order:
+1. Call opendocs_redaction_script with target_text (the visible label of the element you are about to click/type into) or target_selector. After every page load or navigation, call it with install:true directly - don't probe first. On later steps on the same page, use the default one-line call.
 2. Run the returned function in the page with your browser evaluate tool. If it evaluates to {installed:false}, call opendocs_redaction_script again with install:true, run THAT, then continue.
-3. Take a VIEWPORT screenshot (not full-page) and save it to a file your browser tool can write.
-4. Call opendocs_step with file_path, instruction (imperative, what the reader does, e.g. "Click **Add to cart**"), action, page_url, and redaction_report exactly as returned - it carries the highlight target.
+3. Take a VIEWPORT screenshot (not full-page) and save it to a file your browser tool can write. When the target is inside a list or section, keep that section's heading visible if it fits - the script centers the target, so scroll up only a little if the heading is just out of view.
+4. Call opendocs_step with file_path, instruction (imperative, what the reader does, e.g. "Click **Add to cart**" - bold the exact visible label), action, page_url, and redaction_report exactly as returned - it carries the highlight target.
 5. THEN perform the click/type/navigation. Never screenshot after acting; the screenshot must show the page BEFORE the action.
 Reuse the session_id from the first step's result on every later step. A final result step (e.g. a confirmation page) can omit target_text/target_selector. After the LAST step, ALWAYS call opendocs_compile with session_id and a title, then give the user the URL - never stop before compiling. Never type real secrets into forms; redaction covers password fields for you.`;
 
@@ -199,8 +200,9 @@ const REDACTION_SCRIPT_INPUT_SCHEMA = {
     install: {
       type: 'boolean',
       description:
-        'Set true to get the full script (needed once per page load). Omit/false to get the short call, ' +
-        'which returns {installed:false} if the full script has not been installed on this page yet.',
+        'Set true directly after every page load or navigation, to get the full script (needed once per ' +
+        'page load) - do not probe with the short call first. Omit/false on later steps on the same page ' +
+        'to get the short call, which returns {installed:false} if the full script is not installed yet.',
     },
     redact: {
       type: 'string',
@@ -605,9 +607,10 @@ export function createMcpServer(deps: McpDeps = {}): Server {
         description:
           'Get the redaction/target-finding function to run in the page before EACH step, via your ' +
           'browser evaluate tool. Pass target_text or target_selector for the element you are about ' +
-          'to act on. Returns a short one-line call by default; if it evaluates to {installed:false}, ' +
-          'call again with install:true and run that instead (once per page load), then re-run the ' +
-          'short call. Run it, THEN screenshot, THEN opendocs_step - never after the action.',
+          'to act on. Call with install:true directly after every page load or navigation (do not ' +
+          'probe first); on later steps on the same page, use the default one-line call, which ' +
+          'returns {installed:false} if the full script is not installed yet - then call again with ' +
+          'install:true. Run it, THEN screenshot, THEN opendocs_step - never after the action.',
         inputSchema: REDACTION_SCRIPT_INPUT_SCHEMA,
       },
       {
