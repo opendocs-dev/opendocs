@@ -82,6 +82,31 @@ test('off mode script still bakes in the target and skips redaction', () => {
   expect(src).toContain('"target_text":"Add to cart"');
 });
 
+test('matches target text across line breaks', () => {
+  // Both the wanted text and each candidate's text are collapsed with the same
+  // /\s+/g + trim + lowercase normalization before comparing, so "Bun v1.4.2\nLatest"
+  // (an innerText with a line break) matches a needle of "Bun v1.4.2 Latest".
+  const src = buildInstallScript({ mode: 'strict', target_text: 'Bun v1.4.2 Latest' });
+  expect(src).toContain('function normalizeText(text)');
+  expect(src).toContain('replace(/\\s+/g, " ")');
+  expect(src).toContain('needle = normalizeText(text)');
+  expect(src).toContain('normalizeText(texts[j])');
+});
+
+test('reports target outside the viewport', () => {
+  const src = buildInstallScript({ mode: 'strict', target_text: 'Add to cart' });
+  expect(src).toContain('target outside the viewport');
+  expect(src).toContain('trect.bottom <= 0');
+  expect(src).toContain('trect.top >= window.innerHeight');
+  expect(src).toContain('trect.right <= 0');
+  expect(src).toContain('trect.left >= window.innerWidth');
+});
+
+test('uses instant scroll', () => {
+  const src = buildInstallScript({ mode: 'strict', target_text: 'Add to cart' });
+  expect(src).toContain('behavior: "instant"');
+});
+
 // No DOM test library (e.g. happy-dom) is a devDependency here, so target-finding
 // and redaction behavior inside a real page are exercised via MCP integration
 // tests (mcp.test.ts) with a hand-built report instead of running the script itself.
