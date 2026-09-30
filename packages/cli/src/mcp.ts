@@ -767,13 +767,15 @@ async function handleCategories(
   }
 
   const lines = result.data.categories.slice(0, 30).map((cat) => {
-    const desc = cat.description ? `: ${cat.description}` : '';
+    const description = cat.description.length > 80 ? `${cat.description.slice(0, 79)}…` : cat.description;
+    const desc = description ? `: ${description}` : '';
     const suggested = cat.status === 'suggested' ? ' (suggested)' : '';
     return `${cat.name}${desc}${suggested}`;
   });
 
-  // textResult flattens whitespace, so entries are joined with '; ' to stay distinguishable.
-  return textResult(lines.join('; '));
+  // Not through textResult: a category list is data the agent must read in full, so it is
+  // exempt from the 50-token cap (30 lines of at most ~130 chars bound it).
+  return { content: [{ type: 'text', text: lines.join('\n') }] };
 }
 
 /**
