@@ -8,6 +8,7 @@ import {
   AssetUploadResponseSchema,
   CategoriesResponseSchema,
   CategorySchema,
+  CompileRunBodySchema,
   CompileRunParamsSchema,
   CompileRunResponseSchema,
   CreateRunBodySchema,
