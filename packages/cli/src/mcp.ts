@@ -73,7 +73,7 @@ Then for EACH step, in this exact order:
 3. Take a VIEWPORT screenshot (not full-page). Keep the section heading visible if it fits - the script scrolls minimally, or not at all if already visible.
 4. Call opendocs_step with file_path, instruction (imperative, e.g. "Click **Add to cart**" - bold the exact visible label), title (short step title, e.g. "Open Isi Saldo"), alt (what the screenshot shows, 1-2 sentences), action, page_url, and redaction_report exactly as returned - never edit it, never build one yourself; the highlight comes only from the report's target.
 5. THEN perform the click/type/navigation. Never screenshot after acting; it must show the page BEFORE the action.
-Reuse the session_id from the first step's result on every later step; run_title names the whole guide, not the step. A final result step can omit target_text/target_selector. Before compiling, call opendocs_categories once and pass a fitting existing name as category (a new short name is allowed). After the LAST step, ALWAYS call opendocs_compile with session_id and a title, then give the user the URL - never stop before compiling. Never type real secrets into forms; redaction covers password fields for you.`;
+Reuse the session_id from the first step's result on every later step; run_title names the whole guide, not the step. A final result step can omit target_text/target_selector. After the LAST step, ALWAYS call opendocs_compile with session_id and a title, then give the user the URL - never stop before compiling. Never type real secrets into forms; redaction covers password fields for you.`;
 
 const REDACT_MODE_VALUES = ['strict', 'basic', 'off'] as const;
 
@@ -772,7 +772,8 @@ async function handleCategories(
     return `${cat.name}${desc}${suggested}`;
   });
 
-  return textResult(lines.join('\n'));
+  // textResult flattens whitespace, so entries are joined with '; ' to stay distinguishable.
+  return textResult(lines.join('; '));
 }
 
 /**
@@ -825,7 +826,9 @@ export function createMcpServer(deps: McpDeps = {}): Server {
       },
       {
         name: 'opendocs_compile',
-        description: 'Compile a run into a published doc and get back its URL. Always call this last.',
+        description:
+          'Compile a run into a published doc and get back its URL. Always call this last. Call ' +
+          'opendocs_categories once before it and pass a fitting existing name as category (a new short name is allowed).',
         inputSchema: COMPILE_INPUT_SCHEMA,
       },
       {
