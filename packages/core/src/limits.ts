@@ -26,8 +26,11 @@ export const SNAP_TTL = {
   } as const,
 } as const;
 
-/** Free workspace doc image retention in days */
-export const FREE_DOC_IMAGE_DAYS = 30 as const;
+/** Days a step image lives before its run is compiled, or after a newer compile replaces its run */
+export const DRAFT_IMAGE_DAYS = 7 as const;
+
+/** Free workspace cap on live doc images (100 MiB); compiled docs keep their images permanently */
+export const FREE_STORAGE_BYTES = 100 * 1024 * 1024;
 
 /** Daily quotas per workspace plan (D4) */
 export const DAILY_QUOTAS = {
