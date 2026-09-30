@@ -88,8 +88,8 @@ describe('API v1 contract', () => {
     }
   });
 
-  test('shared error schema covers all 15 error codes from C1-AC06', () => {
-    expect(ERROR_CODES).toHaveLength(15);
+  test('shared error schema covers all 16 error codes (C1-AC06, C10-AC01)', () => {
+    expect(ERROR_CODES).toHaveLength(16);
 
     // C1 Foundation
     expect(ERROR_CODES).toContain('unauthorized');
@@ -106,6 +106,7 @@ describe('API v1 contract', () => {
     expect(ERROR_CODES).toContain('breaker_open');
     expect(ERROR_CODES).toContain('gone');
     expect(ERROR_CODES).toContain('upload_failed');
+    expect(ERROR_CODES).toContain('storage_quota_exceeded');
 
     // C3 Runs, Steps and Docs
     expect(ERROR_CODES).toContain('step_limit');
