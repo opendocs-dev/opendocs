@@ -488,6 +488,7 @@ test('stdio server answers tools/list and stays up until stdin closes', async ()
     'opendocs_snap',
     'opendocs_step',
     'opendocs_compile',
+    'opendocs_categories',
   ]);
   proc.stdin.end();
   expect(await proc.exited).toBe(0);
@@ -1415,7 +1416,7 @@ test('compile with category and summary sends them in the JSON body', async () =
   let sawBody: unknown;
   const fetchImpl = routedFetch({
     compile: (init) => {
-      sawBody = JSON.parse(init?.body as string);
+      sawBody = JSON.parse((init as { body: string }).body);
       return new Response(JSON.stringify({ url: '/d/compiled1' }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -1438,7 +1439,7 @@ test('compile with category containing email masks the email in sent body', asyn
   let sawBody: unknown;
   const fetchImpl = routedFetch({
     compile: (init) => {
-      sawBody = JSON.parse(init?.body as string);
+      sawBody = JSON.parse((init as { body: string }).body);
       return new Response(JSON.stringify({ url: '/d/compiled2' }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -1606,7 +1607,7 @@ test('opendocs_categories caps at 30 lines', async () => {
   const result = await client.callTool({ name: 'opendocs_categories', arguments: {} });
 
   const text = (result.content as Array<{ text: string }>)[0]!.text;
-  const lines = text.split('\n');
+  const lines = text.split('; ');
   expect(lines.length).toBe(30);
 });
 
@@ -1621,7 +1622,7 @@ test('opendocs_categories returns not-logged-in error without key', async () => 
   expect(result.isError).toBe(true);
 });
 
-test('instructions mention opendocs_categories before compiling', async () => {
+test('the compile tool description points the agent at opendocs_categories', async () => {
   const server = createMcpServer({
     loadUserMode: async () => undefined,
     loadAppConfig: async () => ({}),
@@ -1631,6 +1632,7 @@ test('instructions mention opendocs_categories before compiling', async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
 
-  const instructions = client.getInstructions();
-  expect(instructions).toContain('call opendocs_categories once and pass a fitting existing name as category');
+  const { tools } = await client.listTools();
+  const compile = tools.find((tool) => tool.name === 'opendocs_compile');
+  expect(compile?.description).toContain('opendocs_categories');
 });
