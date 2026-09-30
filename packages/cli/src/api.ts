@@ -8,6 +8,7 @@ import type {
   AddStepBody,
   AddStepResponse,
   AssetUploadResponse,
+  CategoriesResponse,
   CompileRunResponse,
   CreateRunResponse,
   ErrorResponse,
@@ -275,12 +276,14 @@ export async function addStep(
  * @param sessionId The run's session id.
  * @param title Optional doc title.
  * @param fetchImpl Injectable `fetch`.
+ * @param extra Optional category and summary fields.
  */
 export async function compileRun(
   key: string,
   sessionId: string,
   title?: string,
-  fetchImpl: FetchLike = fetch
+  fetchImpl: FetchLike = fetch,
+  extra?: { category?: string; summary?: string }
 ): Promise<ApiCallResult<CompileRunResponse>> {
   const response = await safeFetch(fetchImpl, `${apiBaseUrl()}/runs/${encodeURIComponent(sessionId)}/compile`, {
     method: 'POST',
@@ -289,8 +292,33 @@ export async function compileRun(
       'x-api-key': key,
       'x-opendocs-cli-version': pkg.version,
     },
-    body: JSON.stringify(title ? { title } : {}),
+    body: JSON.stringify({
+      ...(title ? { title } : {}),
+      ...(extra?.category ? { category: extra.category } : {}),
+      ...(extra?.summary ? { summary: extra.summary } : {}),
+    }),
   });
   if (!(response instanceof Response)) return response;
   return handleApiResponse<CompileRunResponse>(response);
+}
+
+/**
+ * List workspace categories: `GET /categories`.
+ *
+ * @param key API key.
+ * @param fetchImpl Injectable `fetch`.
+ */
+export async function getCategories(
+  key: string,
+  fetchImpl: FetchLike = fetch
+): Promise<ApiCallResult<CategoriesResponse>> {
+  const response = await safeFetch(fetchImpl, `${apiBaseUrl()}/categories`, {
+    method: 'GET',
+    headers: {
+      'x-api-key': key,
+      'x-opendocs-cli-version': pkg.version,
+    },
+  });
+  if (!(response instanceof Response)) return response;
+  return handleApiResponse<CategoriesResponse>(response);
 }
