@@ -1607,7 +1607,7 @@ test('opendocs_categories caps at 30 lines', async () => {
   const result = await client.callTool({ name: 'opendocs_categories', arguments: {} });
 
   const text = (result.content as Array<{ text: string }>)[0]!.text;
-  const lines = text.split('; ');
+  const lines = text.split('\n');
   expect(lines.length).toBe(30);
 });
 
