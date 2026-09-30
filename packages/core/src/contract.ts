@@ -15,6 +15,7 @@ export const V1_ROUTES = [
   'DELETE /api/v1/flows/{publicId}',
   'GET /api/v1/docs/{publicId}',
   'GET /api/v1/docs/{publicId}/markdown',
+  'GET /api/v1/categories',
 ] as const;
 
 export type V1Route = (typeof V1_ROUTES)[number];
@@ -237,6 +238,8 @@ export type CompileRunParams = Static<typeof CompileRunParamsSchema>;
 export const CompileRunBodySchema = Type.Optional(
   Type.Object({
     title: Type.Optional(Type.String()),
+    category: Type.Optional(Type.String({ minLength: 1, maxLength: 40 })),
+    summary: Type.Optional(Type.String({ minLength: 1, maxLength: 300 })),
   })
 );
 
@@ -244,6 +247,7 @@ export type CompileRunBody = Static<typeof CompileRunBodySchema>;
 
 export const CompileRunResponseSchema = Type.Object({
   url: Type.String(),
+  category_status: Type.Optional(Type.Union([Type.Literal('filed'), Type.Literal('suggested'), Type.Literal('cap_reached'), Type.Literal('none')])),
 });
 
 export type CompileRunResponse = Static<typeof CompileRunResponseSchema>;
@@ -333,6 +337,27 @@ export const GetDocResponseSchema = Type.Object({
 export type GetDocResponse = Static<typeof GetDocResponseSchema>;
 
 // ==========================================
+// 10. GET /api/v1/categories
+// ==========================================
+
+export const CategorySchema = Type.Object({
+  id: Type.String(),
+  slug: Type.String(),
+  name: Type.String(),
+  description: Type.String(),
+  status: Type.Union([Type.Literal('active'), Type.Literal('suggested')]),
+  guides: Type.Number(),
+});
+
+export type Category = Static<typeof CategorySchema>;
+
+export const CategoriesResponseSchema = Type.Object({
+  categories: Type.Array(CategorySchema),
+});
+
+export type CategoriesResponse = Static<typeof CategoriesResponseSchema>;
+
+// ==========================================
 // Route Schemas Map
 // ==========================================
 
@@ -346,6 +371,11 @@ export const V1_ROUTE_SCHEMAS = {
     method: 'GET',
     path: '/api/v1/me',
     response: MeResponseSchema,
+  },
+  'GET /api/v1/categories': {
+    method: 'GET',
+    path: '/api/v1/categories',
+    response: CategoriesResponseSchema,
   },
   'POST /api/v1/assets': {
     method: 'POST',
