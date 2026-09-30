@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   CLI_MIN_VERSION,
   DAILY_QUOTAS,
-  FREE_DOC_IMAGE_DAYS,
+  DRAFT_IMAGE_DAYS,
+  FREE_STORAGE_BYTES,
   FREE_STEPS_PER_RUN,
   GLOBAL_BREAKER_ALERT_BYTES,
   GLOBAL_BREAKER_ALERT_RATIO,
@@ -49,8 +50,12 @@ describe('limits and constants', () => {
     expect(MAX_PIXELS).toBe(50000000);
   });
 
-  test('FREE_DOC_IMAGE_DAYS equals 30', () => {
-    expect(FREE_DOC_IMAGE_DAYS).toBe(30);
+  test('DRAFT_IMAGE_DAYS equals 7', () => {
+    expect(DRAFT_IMAGE_DAYS).toBe(7);
+  });
+
+  test('FREE_STORAGE_BYTES equals 100 MiB', () => {
+    expect(FREE_STORAGE_BYTES).toBe(104_857_600);
   });
 
   test('GLOBAL_BREAKER_BYTES equals 50 GB with 80% alert threshold', () => {

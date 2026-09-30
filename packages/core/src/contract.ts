@@ -38,6 +38,7 @@ export const ERROR_CODES = [
   'breaker_open',
   'gone',
   'upload_failed',
+  'storage_quota_exceeded',
   // C3 Runs, Steps and Docs
   'step_limit',
   'redaction_report_missing',
