@@ -6,6 +6,9 @@ import {
   AddStepResponseSchema,
   AssetUploadHeadersSchema,
   AssetUploadResponseSchema,
+  CategoriesResponseSchema,
+  CategorySchema,
+  CompileRunBodySchema,
   CompileRunParamsSchema,
   CompileRunResponseSchema,
   CreateRunBodySchema,
@@ -30,7 +33,7 @@ import { STEP_ALT_MAX, STEP_TITLE_MAX } from './limits';
 
 describe('API v1 contract', () => {
   test('exports a schema for every v1 route', () => {
-    expect(V1_ROUTES).toHaveLength(10);
+    expect(V1_ROUTES).toHaveLength(11);
 
     const expectedRoutes = [
       'GET /api/healthz',
@@ -43,6 +46,7 @@ describe('API v1 contract', () => {
       'DELETE /api/v1/flows/{publicId}',
       'GET /api/v1/docs/{publicId}',
       'GET /api/v1/docs/{publicId}/markdown',
+      'GET /api/v1/categories',
     ];
     // The markdown route returns a text/markdown body, not JSON, so it has no response schema.
     // DELETE /flows/{publicId} returns 204 No Content, so it has no response schema either.
@@ -286,6 +290,73 @@ describe('API v1 contract', () => {
     expect(
       Value.Check(CompileRunResponseSchema, { url: '/d/publicId12345678' })
     ).toBe(true);
+  });
+
+  test('CompileRunBodySchema accepts category and summary', () => {
+    expect(Value.Check(CompileRunBodySchema, { category: 'WhatsApp', summary: 'x' })).toBe(true);
+    expect(Value.Check(CompileRunBodySchema, { title: 'My Doc' })).toBe(true);
+    expect(Value.Check(CompileRunBodySchema, {})).toBe(true);
+  });
+
+  test('CompileRunBodySchema rejects empty category, 41-char category, and 301-char summary', () => {
+    expect(Value.Check(CompileRunBodySchema, { category: '' })).toBe(false);
+    expect(Value.Check(CompileRunBodySchema, { category: 'x'.repeat(41) })).toBe(false);
+    expect(Value.Check(CompileRunBodySchema, { summary: 'x'.repeat(301) })).toBe(false);
+  });
+
+  test('CompileRunResponseSchema accepts category_status', () => {
+    expect(Value.Check(CompileRunResponseSchema, { url: '/d/publicId12345678', category_status: 'suggested' })).toBe(true);
+    expect(Value.Check(CompileRunResponseSchema, { url: '/d/publicId12345678', category_status: 'filed' })).toBe(true);
+    expect(Value.Check(CompileRunResponseSchema, { url: '/d/publicId12345678', category_status: 'cap_reached' })).toBe(true);
+    expect(Value.Check(CompileRunResponseSchema, { url: '/d/publicId12345678', category_status: 'none' })).toBe(true);
+  });
+
+  test('CompileRunResponseSchema rejects invalid category_status', () => {
+    expect(Value.Check(CompileRunResponseSchema, { url: '/d/publicId12345678', category_status: 'other' })).toBe(false);
+  });
+
+  test('validates GET /api/v1/categories response', () => {
+    const validResponse = {
+      categories: [
+        {
+          id: 'cat_123',
+          slug: 'whatsapp',
+          name: 'WhatsApp',
+          description: 'WhatsApp Business guides',
+          status: 'active',
+          guides: 5,
+        },
+      ],
+    };
+    expect(Value.Check(CategoriesResponseSchema, validResponse)).toBe(true);
+
+    const suggestedCategory = {
+      categories: [
+        {
+          id: 'cat_456',
+          slug: 'slack',
+          name: 'Slack',
+          description: 'Slack integration guides',
+          status: 'suggested',
+          guides: 0,
+        },
+      ],
+    };
+    expect(Value.Check(CategoriesResponseSchema, suggestedCategory)).toBe(true);
+
+    const invalidStatus = {
+      categories: [
+        {
+          id: 'cat_789',
+          slug: 'test',
+          name: 'Test',
+          description: 'Test category',
+          status: 'invalid',
+          guides: 1,
+        },
+      ],
+    };
+    expect(Value.Check(CategoriesResponseSchema, invalidStatus)).toBe(false);
   });
 
   test('validates GET /api/v1/flows query and response', () => {

@@ -11,7 +11,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import type { AddStepBody, Box, RedactionReport } from '@opendocs/core/contract';
 import { SNAP_TTL_VALUES, STEP_ALT_MAX, STEP_TITLE_MAX, type SnapTtl } from '@opendocs/core/limits';
 import type { ApiFailureKind, FetchLike } from './api';
-import { addStep, compileRun, createRun, uploadAsset } from './api';
+import { addStep, compileRun, createRun, getCategories, uploadAsset } from './api';
 import { readCredentials } from './config';
 import { maskStepText } from './pii';
 import { computeBoxFromTarget, type TargetRect } from './redact/box';
@@ -206,6 +206,8 @@ const COMPILE_INPUT_SCHEMA = {
   properties: {
     session_id: { type: 'string', description: 'The session_id returned by the run\'s first opendocs_step call.' },
     title: { type: 'string', description: 'Title for the published doc.' },
+    category: { type: 'string', description: 'Category for the guide. Call opendocs_categories first and reuse an existing name when one fits; 1-40 chars.' },
+    summary: { type: 'string', description: 'One or two sentences describing the guide, up to 300 chars.' },
   },
   required: ['session_id'],
   additionalProperties: false,
@@ -477,6 +479,8 @@ function parseStepArgs(args: unknown): StepArgs | string {
 interface CompileArgs {
   session_id: string;
   title?: string;
+  category?: string;
+  summary?: string;
 }
 
 /** Validate raw `opendocs_compile` arguments, or return a one-line error. */
@@ -485,7 +489,22 @@ function parseCompileArgs(args: unknown): CompileArgs | string {
   const a = args as Record<string, unknown>;
   if (typeof a.session_id !== 'string' || a.session_id.length === 0) return 'session_id is required';
   if (a.title !== undefined && typeof a.title !== 'string') return 'title must be a string';
-  return { session_id: a.session_id, title: a.title as string | undefined };
+  if (a.category !== undefined) {
+    if (typeof a.category !== 'string') return 'category must be a string';
+    const trimmedCategory = (a.category as string).trim();
+    if (trimmedCategory.length === 0 || trimmedCategory.length > 40) return 'category must be 1-40 characters';
+  }
+  if (a.summary !== undefined) {
+    if (typeof a.summary !== 'string') return 'summary must be a string';
+    const trimmedSummary = (a.summary as string).trim();
+    if (trimmedSummary.length === 0 || trimmedSummary.length > 300) return 'summary must be 1-300 characters';
+  }
+  return {
+    session_id: a.session_id,
+    title: a.title as string | undefined,
+    category: a.category !== undefined ? (a.category as string).trim() : undefined,
+    summary: a.summary !== undefined ? (a.summary as string).trim() : undefined,
+  };
 }
 
 /** Resolve the effective redaction mode for one call: call > user > app > strict. */
@@ -659,10 +678,23 @@ async function handleCompile(
 
   // The title becomes the public doc title, so it is masked like step text.
   const title = parsed.title !== undefined ? maskStepText(parsed.title).text : undefined;
-  const compiled = await compileRun(key, parsed.session_id, title, fetchImpl);
+  const maskedCategory = parsed.category !== undefined ? maskStepText(parsed.category).text : undefined;
+  const maskedSummary = parsed.summary !== undefined ? maskStepText(parsed.summary).text : undefined;
+
+  const compiled = await compileRun(key, parsed.session_id, title, fetchImpl, {
+    category: maskedCategory,
+    summary: maskedSummary,
+  });
   if (!compiled.ok) return textResult(mapApiError(compiled), true);
 
-  return textResult(compiled.data.url);
+  let message = compiled.data.url;
+  if (compiled.data.category_status === 'suggested') {
+    message += ` Category "${maskedCategory}" is a suggestion until the owner accepts it.`;
+  } else if (compiled.data.category_status === 'cap_reached') {
+    message += ` The category limit is reached, so the guide has no category.`;
+  }
+
+  return textResult(message);
 }
 
 interface RedactionScriptArgs {
@@ -720,6 +752,32 @@ async function handleRedactionScript(
   return { content: [{ type: 'text', text: script }] };
 }
 
+async function handleCategories(
+  fetchImpl: FetchLike,
+  readKey: () => Promise<string | null>
+): Promise<ToolResult> {
+  const key = await readKey();
+  if (!key) return textResult(NOT_LOGGED_IN, true);
+
+  const result = await getCategories(key, fetchImpl);
+  if (!result.ok) return textResult(mapApiError(result), true);
+
+  if (result.data.categories.length === 0) {
+    return textResult('No categories yet. Choose a short name; the owner may review it.');
+  }
+
+  const lines = result.data.categories.slice(0, 30).map((cat) => {
+    const description = cat.description.length > 80 ? `${cat.description.slice(0, 79)}…` : cat.description;
+    const desc = description ? `: ${description}` : '';
+    const suggested = cat.status === 'suggested' ? ' (suggested)' : '';
+    return `${cat.name}${desc}${suggested}`;
+  });
+
+  // Not through textResult: a category list is data the agent must read in full, so it is
+  // exempt from the 50-token cap (30 lines of at most ~130 chars bound it).
+  return { content: [{ type: 'text', text: lines.join('\n') }] };
+}
+
 /**
  * Build the MCP server with its tool handlers wired up.
  *
@@ -770,8 +828,16 @@ export function createMcpServer(deps: McpDeps = {}): Server {
       },
       {
         name: 'opendocs_compile',
-        description: 'Compile a run into a published doc and get back its URL. Always call this last.',
+        description:
+          'Compile a run into a published doc and get back its URL. Always call this last. Call ' +
+          'opendocs_categories once before it and pass a fitting existing name as category (a new short name is allowed).',
         inputSchema: COMPILE_INPUT_SCHEMA,
+      },
+      {
+        name: 'opendocs_categories',
+        description:
+          'List the workspace\'s categories (name: description). Call it once before opendocs_compile and reuse a name when one fits.',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       },
     ],
   }));
@@ -788,6 +854,8 @@ export function createMcpServer(deps: McpDeps = {}): Server {
           return await handleStep(args, fetchImpl, readKey, loadUser, loadApp, cwd, nonceStore);
         case 'opendocs_compile':
           return await handleCompile(args, fetchImpl, readKey);
+        case 'opendocs_categories':
+          return await handleCategories(fetchImpl, readKey);
         default:
           return textResult(`unknown tool: ${name}`, true);
       }

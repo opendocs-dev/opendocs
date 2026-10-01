@@ -218,12 +218,13 @@ test('every input property of every tool has a description', async () => {
   expect(missing).toEqual([]);
 });
 
-test('lists exactly 4 tools', async () => {
+test('lists exactly 5 tools', async () => {
   const client = await connect({ readKey: async () => testKey, fetch: stubFetch({}, 500) });
   const { tools } = await client.listTools();
 
-  expect(tools.length).toBe(4);
+  expect(tools.length).toBe(5);
   expect(tools.map((t) => t.name).sort()).toEqual([
+    'opendocs_categories',
     'opendocs_compile',
     'opendocs_redaction_script',
     'opendocs_snap',
@@ -487,6 +488,7 @@ test('stdio server answers tools/list and stays up until stdin closes', async ()
     'opendocs_snap',
     'opendocs_step',
     'opendocs_compile',
+    'opendocs_categories',
   ]);
   proc.stdin.end();
   expect(await proc.exited).toBe(0);
@@ -1408,4 +1410,229 @@ test('opendocs_snap gets the same viewport and iframe lines', async () => {
   const text = (result.content as Array<{ text: string }>)[0]!.text;
   expect(text).toContain('page is 1920px wide: resize the viewport to 1280x800 before the next step');
   expect(text).toContain('1 cross-origin iframe(s) on screen: not redacted, no highlight inside');
+});
+
+test('compile with category and summary sends them in the JSON body', async () => {
+  let sawBody: unknown;
+  const fetchImpl = routedFetch({
+    compile: (init) => {
+      sawBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ url: '/d/compiled1' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_compile',
+    arguments: { session_id: 'run_1', category: 'WhatsApp', summary: 'How to send a message' },
+  });
+
+  expect(sawBody).toEqual({ category: 'WhatsApp', summary: 'How to send a message' });
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toBe('/d/compiled1');
+});
+
+test('compile with category containing email masks the email in sent body', async () => {
+  let sawBody: unknown;
+  const fetchImpl = routedFetch({
+    compile: (init) => {
+      sawBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ url: '/d/compiled2' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_compile',
+    arguments: { session_id: 'run_1', category: 'user@example.com' },
+  });
+
+  const body = sawBody as Record<string, unknown>;
+  expect(body.category).not.toBe('user@example.com');
+  expect(typeof body.category).toBe('string');
+  expect((body.category as string).length).toBeGreaterThan(0);
+});
+
+test('compile rejects category of 41 chars and empty summary', async () => {
+  let fetchCalled = false;
+  const fetchImpl = routedFetch({
+    compile: () => {
+      fetchCalled = true;
+      return new Response(JSON.stringify({ url: '/d/compiled3' }), { status: 200 });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_compile',
+    arguments: { session_id: 'run_1', category: 'x'.repeat(41) },
+  });
+
+  expect(fetchCalled).toBe(false);
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toBe('category must be 1-40 characters');
+  expect(result.isError).toBe(true);
+});
+
+test('compile with empty summary rejects it', async () => {
+  let fetchCalled = false;
+  const fetchImpl = routedFetch({
+    compile: () => {
+      fetchCalled = true;
+      return new Response(JSON.stringify({ url: '/d/compiled4' }), { status: 200 });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_compile',
+    arguments: { session_id: 'run_1', summary: '  ' },
+  });
+
+  expect(fetchCalled).toBe(false);
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toBe('summary must be 1-300 characters');
+  expect(result.isError).toBe(true);
+});
+
+test('compile appends suggestion sentence when category_status is suggested', async () => {
+  const fetchImpl = routedFetch({
+    compile: () =>
+      new Response(JSON.stringify({ url: '/d/compiled5', category_status: 'suggested' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_compile',
+    arguments: { session_id: 'run_1', category: 'NewCategory' },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toContain('/d/compiled5');
+  expect(text).toContain('Category "NewCategory" is a suggestion until the owner accepts it.');
+});
+
+test('compile appends cap limit sentence when category_status is cap_reached', async () => {
+  const fetchImpl = routedFetch({
+    compile: () =>
+      new Response(JSON.stringify({ url: '/d/compiled6', category_status: 'cap_reached' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_compile',
+    arguments: { session_id: 'run_1', category: 'CapReached' },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toContain('/d/compiled6');
+  expect(text).toContain('The category limit is reached, so the guide has no category.');
+});
+
+test('compile does not append status message when category_status is filed or none', async () => {
+  const fetchImpl = routedFetch({
+    compile: () =>
+      new Response(JSON.stringify({ url: '/d/compiled7', category_status: 'filed' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({
+    name: 'opendocs_compile',
+    arguments: { session_id: 'run_1', category: 'Filed' },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toBe('/d/compiled7');
+});
+
+test('opendocs_categories returns categories formatted as name: description', async () => {
+  const fetchImpl = stubFetch(
+    {
+      categories: [
+        { id: 'cat_1', slug: 'whatsapp', name: 'WhatsApp', description: 'WhatsApp guides', status: 'active', guides: 5 },
+        { id: 'cat_2', slug: 'slack', name: 'Slack', description: '', status: 'active', guides: 3 },
+        { id: 'cat_3', slug: 'telegram', name: 'Telegram', description: 'Telegram integration', status: 'suggested', guides: 0 },
+      ],
+    },
+    200
+  );
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({ name: 'opendocs_categories', arguments: {} });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toContain('WhatsApp: WhatsApp guides');
+  expect(text).toContain('Slack');
+  expect(text).not.toContain('Slack:');
+  expect(text).toContain('Telegram: Telegram integration (suggested)');
+});
+
+test('opendocs_categories returns empty message when list is empty', async () => {
+  const fetchImpl = stubFetch({ categories: [] }, 200);
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({ name: 'opendocs_categories', arguments: {} });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toBe('No categories yet. Choose a short name; the owner may review it.');
+});
+
+test('opendocs_categories caps at 30 lines', async () => {
+  const categories = Array.from({ length: 40 }, (_, i) => ({
+    id: `cat_${i}`,
+    slug: `cat${i}`,
+    name: `Category ${i}`,
+    description: `Description ${i}`,
+    status: 'active' as const,
+    guides: i,
+  }));
+  const fetchImpl = stubFetch({ categories }, 200);
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl });
+
+  const result = await client.callTool({ name: 'opendocs_categories', arguments: {} });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  const lines = text.split('\n');
+  expect(lines.length).toBe(30);
+});
+
+test('opendocs_categories returns not-logged-in error without key', async () => {
+  const fetchImpl = stubFetch({}, 500);
+  const client = await connect({ readKey: async () => null, fetch: fetchImpl });
+
+  const result = await client.callTool({ name: 'opendocs_categories', arguments: {} });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toBe('not logged in: run opendocs login --key <key>');
+  expect(result.isError).toBe(true);
+});
+
+test('the compile tool description points the agent at opendocs_categories', async () => {
+  const server = createMcpServer({
+    loadUserMode: async () => undefined,
+    loadAppConfig: async () => ({}),
+    cwd: () => '/tmp',
+  });
+  const client = new Client({ name: 'test-client', version: '0.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  const { tools } = await client.listTools();
+  const compile = tools.find((tool) => tool.name === 'opendocs_compile');
+  expect(compile?.description).toContain('opendocs_categories');
 });
