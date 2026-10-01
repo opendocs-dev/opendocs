@@ -19,6 +19,7 @@ import {
   ERROR_CODES,
   ErrorCodeSchema,
   ErrorResponseSchema,
+  FlowItemSchema,
   GetDocParamsSchema,
   GetDocResponseSchema,
   HealthzResponseSchema,
