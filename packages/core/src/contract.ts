@@ -80,6 +80,7 @@ export type HealthzResponse = Static<typeof HealthzResponseSchema>;
 export const MeWorkspaceSchema = Type.Object({
   id: Type.String(),
   name: Type.String(),
+  slug: Type.Optional(Type.String()),
 });
 
 export const MePlanSchema = Type.Union([
@@ -98,6 +99,8 @@ export const MeResponseSchema = Type.Object({
   plan: MePlanSchema,
   quota: MeQuotaSchema,
   min_cli_version: Type.String(),
+  role: Type.Optional(Type.Union([Type.Literal('owner'), Type.Literal('admin'), Type.Literal('editor')])),
+  site_host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 
 export type MeResponse = Static<typeof MeResponseSchema>;
@@ -259,6 +262,9 @@ export type CompileRunResponse = Static<typeof CompileRunResponseSchema>;
 export const ListFlowsQuerySchema = Type.Object({
   limit: Type.Optional(Type.Number()),
   cursor: Type.Optional(Type.String()),
+  q: Type.Optional(Type.String()),
+  category: Type.Optional(Type.String()),
+  visibility: Type.Optional(Type.Union([Type.Literal('published'), Type.Literal('unlisted'), Type.Literal('draft')])),
 });
 
 export type ListFlowsQuery = Static<typeof ListFlowsQuerySchema>;
@@ -269,6 +275,11 @@ export const FlowItemSchema = Type.Object({
   last_run_at: Type.String(),
   url: Type.Union([Type.String(), Type.Null()]),
   not_redacted: Type.Boolean(),
+  slug: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  summary: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  visibility: Type.Optional(Type.Union([Type.Literal('published'), Type.Literal('unlisted'), Type.Literal('draft')])),
+  steps: Type.Optional(Type.Integer()),
+  category: Type.Optional(Type.Union([Type.Object({ id: Type.String(), name: Type.String(), status: Type.Union([Type.Literal('active'), Type.Literal('suggested')]) }), Type.Null()])),
 });
 
 export type FlowItem = Static<typeof FlowItemSchema>;
