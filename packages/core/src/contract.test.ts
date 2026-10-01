@@ -164,6 +164,34 @@ describe('API v1 contract', () => {
 
     const invalidPlan = { ...validMe, plan: 'enterprise' };
     expect(Value.Check(MeResponseSchema, invalidPlan)).toBe(false);
+
+    // Accept old shape (no role, no site_host, no workspace.slug)
+    expect(Value.Check(MeResponseSchema, validMe)).toBe(true);
+
+    // Accept new shape with admin role and workspace slug
+    const meWithRole = {
+      ...validMe,
+      role: 'admin',
+      workspace: { ...validMe.workspace, slug: 'my-workspace' },
+      site_host: 'my-workspace.opendocs.io',
+    };
+    expect(Value.Check(MeResponseSchema, meWithRole)).toBe(true);
+
+    // Accept editor role
+    const meWithEditor = { ...validMe, role: 'editor' };
+    expect(Value.Check(MeResponseSchema, meWithEditor)).toBe(true);
+
+    // Accept owner role
+    const meWithOwner = { ...validMe, role: 'owner' };
+    expect(Value.Check(MeResponseSchema, meWithOwner)).toBe(true);
+
+    // Accept site_host as null
+    const meWithNullHost = { ...validMe, site_host: null };
+    expect(Value.Check(MeResponseSchema, meWithNullHost)).toBe(true);
+
+    // Reject invalid role
+    const meWithInvalidRole = { ...validMe, role: 'member' };
+    expect(Value.Check(MeResponseSchema, meWithInvalidRole)).toBe(false);
   });
 
   test('validates POST /api/v1/assets headers and response', () => {
@@ -365,6 +393,15 @@ describe('API v1 contract', () => {
       true
     );
 
+    // Accept new query parameters
+    expect(Value.Check(ListFlowsQuerySchema, { q: 'checkout', category: 'none', visibility: 'draft' })).toBe(true);
+    expect(Value.Check(ListFlowsQuerySchema, { q: 'search term', category: 'cat_123' })).toBe(true);
+    expect(Value.Check(ListFlowsQuerySchema, { visibility: 'published' })).toBe(true);
+    expect(Value.Check(ListFlowsQuerySchema, { visibility: 'unlisted' })).toBe(true);
+
+    // Reject invalid visibility value
+    expect(Value.Check(ListFlowsQuerySchema, { visibility: 'archived' })).toBe(false);
+
     const validResponse = {
       items: [
         {
@@ -382,6 +419,67 @@ describe('API v1 contract', () => {
 
   test('validates DELETE /api/v1/flows/{publicId} params', () => {
     expect(Value.Check(DeleteFlowParamsSchema, { publicId: 'flow123456789012' })).toBe(true);
+  });
+
+  test('FlowItemSchema accepts old and new shapes', () => {
+    // Old shape (no optional admin fields)
+    const oldShape = {
+      public_id: 'flow123456789012',
+      title: 'Checkout Flow',
+      last_run_at: '2026-09-28T12:00:00Z',
+      url: '/d/flow123456789012',
+      not_redacted: false,
+    };
+    expect(Value.Check(FlowItemSchema, oldShape)).toBe(true);
+
+    // New shape with optional fields including null category
+    const newShapeWithNullCategory = {
+      public_id: 'flow123456789012',
+      title: 'Checkout Flow',
+      last_run_at: '2026-09-28T12:00:00Z',
+      url: '/d/flow123456789012',
+      not_redacted: false,
+      slug: 'checkout-flow',
+      summary: 'A guide for completing checkout',
+      visibility: 'published',
+      steps: 5,
+      category: null,
+    };
+    expect(Value.Check(FlowItemSchema, newShapeWithNullCategory)).toBe(true);
+
+    // New shape with category object
+    const newShapeWithCategory = {
+      public_id: 'flow123456789012',
+      title: 'Checkout Flow',
+      last_run_at: '2026-09-28T12:00:00Z',
+      url: '/d/flow123456789012',
+      not_redacted: false,
+      slug: 'checkout-flow',
+      summary: 'A guide for completing checkout',
+      visibility: 'draft',
+      steps: 3,
+      category: {
+        id: 'cat_123',
+        name: 'Payment',
+        status: 'active',
+      },
+    };
+    expect(Value.Check(FlowItemSchema, newShapeWithCategory)).toBe(true);
+
+    // Reject category with invalid status
+    const invalidCategoryStatus = {
+      public_id: 'flow123456789012',
+      title: 'Checkout Flow',
+      last_run_at: '2026-09-28T12:00:00Z',
+      url: '/d/flow123456789012',
+      not_redacted: false,
+      category: {
+        id: 'cat_123',
+        name: 'Payment',
+        status: 'other',
+      },
+    };
+    expect(Value.Check(FlowItemSchema, invalidCategoryStatus)).toBe(false);
   });
 
   test('validates GET /api/v1/docs/{publicId} params and response', () => {
