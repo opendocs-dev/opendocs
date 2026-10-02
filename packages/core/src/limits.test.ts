@@ -42,8 +42,8 @@ describe('limits and constants', () => {
     expect(DAILY_QUOTAS.pro.files).toBe(2000);
     expect(DAILY_QUOTAS.pro.bytes).toBe(2 * 1024 * 1024 * 1024);
 
-    expect(DAILY_QUOTAS.team.files).toBe(10000);
-    expect(DAILY_QUOTAS.team.bytes).toBe(10 * 1024 * 1024 * 1024);
+    expect(DAILY_QUOTAS.enterprise.files).toBe(10000);
+    expect(DAILY_QUOTAS.enterprise.bytes).toBe(10 * 1024 * 1024 * 1024);
   });
 
   test('MAX_PIXELS equals 50000000', () => {

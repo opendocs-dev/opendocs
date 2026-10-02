@@ -86,7 +86,7 @@ export const MeWorkspaceSchema = Type.Object({
 export const MePlanSchema = Type.Union([
   Type.Literal('free'),
   Type.Literal('pro'),
-  Type.Literal('team'),
+  Type.Literal('enterprise'),
 ]);
 
 export const MeQuotaSchema = Type.Object({
