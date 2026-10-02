@@ -112,7 +112,11 @@ export type MeResponse = Static<typeof MeResponseSchema>;
 export const AssetUploadHeadersSchema = Type.Object({
   'content-type': Type.String(),
   'content-length': Type.Optional(Type.String()),
-  'x-opendocs-kind': Type.Union([Type.Literal('step'), Type.Literal('snap')]),
+  'x-opendocs-kind': Type.Union([
+    Type.Literal('step'),
+    Type.Literal('snap'),
+    Type.Literal('brand'),
+  ]),
   'x-opendocs-ttl': Type.Optional(
     Type.Union([
       Type.Literal('15m'),
