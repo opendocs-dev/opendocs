@@ -1636,3 +1636,118 @@ test('the compile tool description points the agent at opendocs_categories', asy
   const compile = tools.find((tool) => tool.name === 'opendocs_compile');
   expect(compile?.description).toContain('opendocs_categories');
 });
+
+test('step body carries the mapped page_url and never the staging host', async () => {
+  let stepBody: unknown;
+  const fetchImpl = routedFetch({
+    runs: () =>
+      new Response(JSON.stringify({ session_id: 'run_1' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      stepBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const urlMap = new Map([['pfnapp.my.id', 'pfnapp.id']]);
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl, urlMap });
+
+  await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      page_url: 'https://pfnapp.my.id/console/whatsapp/templates/new?tab=1',
+      redact: 'off',
+    },
+  });
+
+  const body = stepBody as { page_url?: string };
+  expect(body.page_url).toBe('https://pfnapp.id/console/whatsapp/templates/new?tab=1');
+  expect(JSON.stringify(body)).not.toContain('pfnapp.my.id');
+});
+
+test('step result line mentions the rewrite', async () => {
+  const fetchImpl = routedFetch({
+    runs: () =>
+      new Response(JSON.stringify({ session_id: 'run_1' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: () =>
+      new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  });
+  const urlMap = new Map([['pfnapp.my.id', 'pfnapp.id']]);
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl, urlMap });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      page_url: 'https://pfnapp.my.id/login',
+      redact: 'off',
+    },
+  });
+
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).toContain('page_url shown as https://pfnapp.id/login');
+});
+
+test('step with no OPENDOCS_URL_MAP sends page_url unchanged', async () => {
+  let stepBody: unknown;
+  const fetchImpl = routedFetch({
+    runs: () =>
+      new Response(JSON.stringify({ session_id: 'run_1' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    assets: () =>
+      new Response(JSON.stringify({ id: 'asset_1', url: 'https://x/asset_1', expires_at: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    steps: (init) => {
+      stepBody = JSON.parse((init as { body: string }).body);
+      return new Response(JSON.stringify({ order: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const client = await connect({ readKey: async () => testKey, fetch: fetchImpl, urlMap: new Map() });
+
+  const result = await client.callTool({
+    name: 'opendocs_step',
+    arguments: {
+      file_path: imagePath,
+      instruction: 'Click the button',
+      action: 'click',
+      page_url: 'https://pfnapp.my.id/login',
+      redact: 'off',
+    },
+  });
+
+  expect((stepBody as { page_url?: string }).page_url).toBe('https://pfnapp.my.id/login');
+  const text = (result.content as Array<{ text: string }>)[0]!.text;
+  expect(text).not.toContain('page_url shown as');
+});

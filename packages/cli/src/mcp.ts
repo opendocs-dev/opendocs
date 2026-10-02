@@ -20,6 +20,7 @@ import { computeReportSig } from './redact/hash';
 import { createNonceStore, type NonceStore } from './redact/nonce';
 import { buildInstallScript, buildOneLineCall, type RunOptions } from './redact/script';
 import { prepareImage, uploadImage } from './upload';
+import { mapPageUrl, parseUrlMap, type UrlMap } from './url-map';
 import pkg from '../package.json' with { type: 'json' };
 
 /** Collaborators for {@link createMcpServer}, injected so tests avoid real I/O. */
@@ -29,6 +30,7 @@ export interface McpDeps {
   loadUserMode?: () => Promise<RedactMode | undefined>;
   loadAppConfig?: (cwd: string) => Promise<{ mode?: RedactMode; selectors?: string[]; allow?: string[] }>;
   cwd?: () => string;
+  urlMap?: UrlMap;
 }
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: true };
@@ -558,7 +560,8 @@ async function handleStep(
   loadUser: () => Promise<RedactMode | undefined>,
   loadApp: (cwd: string) => Promise<{ mode?: RedactMode }>,
   cwd: () => string,
-  nonceStore: NonceStore
+  nonceStore: NonceStore,
+  urlMap: UrlMap
 ): Promise<ToolResult> {
   const parsed = parseStepArgs(args);
   if (typeof parsed === 'string') return textResult(parsed, true);
@@ -610,6 +613,9 @@ async function handleStep(
   const uploaded = await uploadAsset(key, prepared.bytes, 'step', undefined, fetchImpl);
   if (!uploaded.ok) return textResult(mapApiError(uploaded), true);
 
+  const mappedPageUrl =
+    parsed.page_url !== undefined ? mapPageUrl(parsed.page_url, urlMap) : undefined;
+
   const body: AddStepBody = {
     asset_id: uploaded.data.id,
     action: parsed.action,
@@ -618,7 +624,7 @@ async function handleStep(
     alt: maskedAlt,
     selector: parsed.selector,
     box,
-    page_url: parsed.page_url,
+    page_url: mappedPageUrl?.url ?? parsed.page_url,
     redaction:
       mode === 'off'
         ? { mode }
@@ -630,10 +636,11 @@ async function handleStep(
 
   const maskedNote = maskedInstruction.count > 0 ? `, masked=${maskedInstruction.count}` : '';
   const highlightNote = noHighlightReason ? `, no highlight (${shortenReason(noHighlightReason)})` : '';
+  const urlMapNote = mappedPageUrl?.rewritten ? ` page_url shown as ${mappedPageUrl.url}` : '';
   const nudge = nudgeLines(maskedStepTitle === undefined, maskedAlt === undefined, parsed.redaction_report);
   return textResult(
     `step ${step.data.order} recorded, session_id=${sessionId}${maskedNote}${highlightNote}. ` +
-      `Next: next step, or opendocs_compile when done.${nudge}`
+      `Next: next step, or opendocs_compile when done.${urlMapNote}${nudge}`
   );
 }
 
@@ -790,6 +797,7 @@ export function createMcpServer(deps: McpDeps = {}): Server {
   const loadApp = deps.loadAppConfig ?? loadAppConfig;
   const cwd = deps.cwd ?? (() => process.cwd());
   const nonceStore = createNonceStore();
+  const urlMap = deps.urlMap ?? parseUrlMap();
 
   const server = new Server(
     { name: 'opendocs', version: pkg.version },
@@ -851,7 +859,7 @@ export function createMcpServer(deps: McpDeps = {}): Server {
         case 'opendocs_snap':
           return await handleSnap(args, fetchImpl, readKey, loadUser, loadApp, cwd, nonceStore);
         case 'opendocs_step':
-          return await handleStep(args, fetchImpl, readKey, loadUser, loadApp, cwd, nonceStore);
+          return await handleStep(args, fetchImpl, readKey, loadUser, loadApp, cwd, nonceStore, urlMap);
         case 'opendocs_compile':
           return await handleCompile(args, fetchImpl, readKey);
         case 'opendocs_categories':

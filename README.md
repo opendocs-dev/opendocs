@@ -46,6 +46,18 @@ Cursor:
 
 The alpha talks to `https://opendocs.tunnel.juniyadi.id` by default; set `OPENDOCS_API_URL` to override it.
 
+### Recording on staging
+
+If you record on a staging host but the app is public under a different domain, set `OPENDOCS_URL_MAP` so the
+doc shows the public host instead:
+
+```sh
+OPENDOCS_URL_MAP=pfnapp.my.id=pfnapp.id
+```
+
+Format is comma-separated `from=to` pairs. Only the host (and port) is swapped; path, query and hash are kept.
+Screenshots are not edited, so keep the host out of the captured viewport (e.g. no visible URL bar).
+
 ## Build from source
 
 ```sh
