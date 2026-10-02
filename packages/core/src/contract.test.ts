@@ -209,6 +209,12 @@ describe('API v1 contract', () => {
     };
     expect(Value.Check(AssetUploadHeadersSchema, validSnapHeaders)).toBe(true);
 
+    const validBrandHeaders = {
+      'content-type': 'image/png',
+      'x-opendocs-kind': 'brand',
+    };
+    expect(Value.Check(AssetUploadHeadersSchema, validBrandHeaders)).toBe(true);
+
     const validResponse = {
       id: 'abc123xyz4567890',
       url: 'https://i.opendocs.juniyadi.id/i/abc123xyz4567890',
