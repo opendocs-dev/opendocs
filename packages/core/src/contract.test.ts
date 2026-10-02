@@ -163,7 +163,7 @@ describe('API v1 contract', () => {
     };
     expect(Value.Check(MeResponseSchema, validMe)).toBe(true);
 
-    const invalidPlan = { ...validMe, plan: 'enterprise' };
+    const invalidPlan = { ...validMe, plan: 'team' };
     expect(Value.Check(MeResponseSchema, invalidPlan)).toBe(false);
 
     // Accept old shape (no role, no site_host, no workspace.slug)

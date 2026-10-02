@@ -42,7 +42,7 @@ export const DAILY_QUOTAS = {
     files: 2000,
     bytes: 2 * 1024 * 1024 * 1024, // 2 GB = 2_147_483_648 bytes
   },
-  team: {
+  enterprise: {
     files: 10000,
     bytes: 10 * 1024 * 1024 * 1024, // 10 GB = 10_737_418_240 bytes
   },
