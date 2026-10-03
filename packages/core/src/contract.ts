@@ -346,6 +346,8 @@ export const GetDocResponseSchema = Type.Object({
   title: Type.String(),
   plan: Type.Optional(Type.String()),
   is_free_plan: Type.Optional(Type.Boolean()),
+  preset: Type.Optional(Type.String()),
+  custom_branding: Type.Optional(Type.Any()),
   steps: Type.Array(DocStepSchema),
 });
 
