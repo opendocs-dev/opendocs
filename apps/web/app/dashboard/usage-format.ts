@@ -1,4 +1,11 @@
-import { DAILY_QUOTAS, type Plan } from '@opendocs/core';
+type Plan = keyof typeof DAILY_QUOTAS;
+
+/** Local copy: the plan quota table was removed from @opendocs/core (C23 AC-15); goes with the plan screen (AC-18). */
+const DAILY_QUOTAS = {
+  free: { files: 200, bytes: 200 * 1024 * 1024 },
+  pro: { files: 2000, bytes: 2 * 1024 * 1024 * 1024 },
+  enterprise: { files: 10000, bytes: 10 * 1024 * 1024 * 1024 },
+} as const;
 
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
