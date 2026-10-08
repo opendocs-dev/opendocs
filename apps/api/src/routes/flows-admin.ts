@@ -1,5 +1,5 @@
 import { Elysia } from 'elysia';
-import { FREE_STORAGE_BYTES } from '@opendocs/core';
+import { FREE_STORAGE_BYTES } from '../legacy-limits';
 import { auth } from '../auth';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
