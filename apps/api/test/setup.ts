@@ -16,7 +16,7 @@ const defaults: Record<string, () => string> = {
   S3_ACCESS_KEY_ID: () => ['test', 'access', 'key'].join('-'),
   S3_SECRET_ACCESS_KEY: () => ['test', 'secret', 'key'].join('-'),
   S3_FORCE_PATH_STYLE: () => 'true',
-  ADMIN_EMAILS: () => 'admin@example.com',
+  ADMIN_EMAILS: () => 'admin@example.com,octocat@example.com',
   // Several test users sign in; the open-until-first-user default is covered by signup-policy.test.ts.
   ALLOW_SIGNUP: () => 'true',
 };
