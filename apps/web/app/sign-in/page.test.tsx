@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe('SignInPage (UI-A1, AC-06)', () => {
-  test('redirects to /dashboard when user is already signed in', async () => {
+  test('redirects to /admin when user is already signed in', async () => {
     responses = {
       '/api/auth/get-session': {
         status: 200,
@@ -47,7 +47,7 @@ describe('SignInPage (UI-A1, AC-06)', () => {
     stubFetch();
 
     await expect(SignInPage({ searchParams: Promise.resolve({}) })).rejects.toMatchObject({
-      digest: expect.stringContaining('NEXT_REDIRECT;replace;/dashboard'),
+      digest: expect.stringContaining('NEXT_REDIRECT;replace;/admin'),
     });
   });
 
