@@ -5,8 +5,8 @@ import {
   CompileRunResponseSchema,
   CreateRunBodySchema,
   CreateRunResponseSchema,
-  DRAFT_IMAGE_DAYS,
-  FREE_STEPS_PER_RUN,
+  DEFAULT_DRAFT_IMAGE_DAYS,
+  DEFAULT_MAX_STEPS_PER_RUN,
   PUBLIC_ID_LENGTH,
   type AddStepBody,
   type CompileRunBody,
@@ -152,11 +152,11 @@ export const runsRoute = new Elysia()
         }
         const count = await tx.step.count({ where: { runId: run.id } });
 
-        if (plan === 'free' && count >= FREE_STEPS_PER_RUN) {
+        if (plan === 'free' && count >= DEFAULT_MAX_STEPS_PER_RUN) {
           throw new ApiError(
             422,
             'step_limit',
-            `Free workspaces are limited to ${FREE_STEPS_PER_RUN} steps per run`,
+            `Free workspaces are limited to ${DEFAULT_MAX_STEPS_PER_RUN} steps per run`,
           );
         }
 
@@ -239,7 +239,7 @@ export const runsRoute = new Elysia()
         // The run it replaces drops back to a draft window, unless one of its images is
         // also referenced by this run's steps.
         if (previousLatestRunId && previousLatestRunId !== run.id) {
-          const graceEnd = new Date(now.getTime() + DRAFT_IMAGE_DAYS * 86_400_000);
+          const graceEnd = new Date(now.getTime() + DEFAULT_DRAFT_IMAGE_DAYS * 86_400_000);
           await tx.asset.updateMany({
             where: {
               organizationId: flow.organizationId,

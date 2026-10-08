@@ -1,4 +1,5 @@
-import { FREE_STORAGE_BYTES, MAX_BYTES, SNAP_TTL } from '@opendocs/core';
+import { MAX_BYTES, SNAP_TTL } from '@opendocs/core';
+import { FREE_STORAGE_BYTES } from '../legacy-limits';
 import { AssetUploadResponseSchema } from '@opendocs/core';
 import { Value } from '@sinclair/typebox/value';
 import { mkdtemp, readdir } from 'node:fs/promises';

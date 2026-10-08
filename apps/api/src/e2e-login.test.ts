@@ -162,10 +162,9 @@ test('sets a session cookie and redirects', async () => {
       }),
     );
     expect(meRes.status).toBe(200);
-    const meBody = (await meRes.json()) as { workspace: { name: string }; role?: string; plan?: string };
+    const meBody = (await meRes.json()) as { workspace: { name: string }; role?: string };
     expect(meBody.workspace).toBeDefined();
     expect(meBody.role).toBe('owner');
-    expect(meBody.plan).toBe('free');
   } finally {
     if (origEnabled !== undefined) process.env.E2E_LOGIN_ENABLED = origEnabled;
     else delete process.env.E2E_LOGIN_ENABLED;

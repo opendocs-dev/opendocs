@@ -154,7 +154,6 @@ describe('API v1 contract', () => {
         id: 'ws_123',
         name: 'My Workspace',
       },
-      plan: 'free',
       quota: {
         files_left: 200,
         bytes_left: 209715200,
@@ -163,8 +162,12 @@ describe('API v1 contract', () => {
     };
     expect(Value.Check(MeResponseSchema, validMe)).toBe(true);
 
-    const invalidPlan = { ...validMe, plan: 'team' };
-    expect(Value.Check(MeResponseSchema, invalidPlan)).toBe(false);
+    // me response without quota validates (quota is optional)
+    const { quota: _quota, ...meNoQuota } = validMe;
+    expect(Value.Check(MeResponseSchema, meNoQuota)).toBe(true);
+
+    // a stray plan field is accepted and ignored (TypeBox objects allow additional properties)
+    expect(Value.Check(MeResponseSchema, { ...validMe, plan: 'free' })).toBe(true);
 
     // Accept old shape (no role, no site_host, no workspace.slug)
     expect(Value.Check(MeResponseSchema, validMe)).toBe(true);
@@ -495,8 +498,6 @@ describe('API v1 contract', () => {
     const validDoc = {
       public_id: 'doc123456789012',
       title: 'Documentation',
-      plan: 'free',
-      is_free_plan: true,
       steps: [
         {
           order: 1,

@@ -8,7 +8,6 @@ import {
 import { Elysia } from 'elysia';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
-import { getPlan } from '../plan';
 
 const notFound = () => new ApiError(404, 'not_found', 'Doc not found');
 
@@ -246,13 +245,10 @@ export const docsRoute = new Elysia()
       set.headers['x-robots-tag'] = 'noindex';
 
       const { flow, steps } = await loadDoc(params.publicId);
-      const plan = await getPlan(flow.organizationId);
 
       return {
         public_id: flow.publicId,
         title: flow.title,
-        plan,
-        is_free_plan: plan === 'free',
         steps: steps.map((step, index) => toDocStep({ ...step, order: index + 1 })),
       };
     },

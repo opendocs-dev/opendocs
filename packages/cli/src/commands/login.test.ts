@@ -55,7 +55,6 @@ test('saves credentials on 200', async () => {
   const seen: { headers?: Record<string, string>; url?: string } = {};
   const me = {
     workspace: { id: 'ws_1', name: 'Acme Docs' },
-    plan: 'pro',
     quota: { files_left: 10, bytes_left: 1024 },
     min_cli_version: '0.1.0',
   };

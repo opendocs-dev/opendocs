@@ -1,8 +1,4 @@
-import {
-  DAILY_QUOTAS,
-  GLOBAL_BREAKER_ALERT_BYTES,
-  GLOBAL_BREAKER_BYTES,
-} from '@opendocs/core';
+import { DAILY_QUOTAS, GLOBAL_BREAKER_ALERT_BYTES, GLOBAL_BREAKER_BYTES } from './legacy-limits';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

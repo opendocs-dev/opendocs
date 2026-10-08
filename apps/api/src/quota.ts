@@ -1,9 +1,4 @@
-import {
-  DAILY_QUOTAS,
-  FREE_STORAGE_BYTES,
-  GLOBAL_BREAKER_ALERT_BYTES,
-  GLOBAL_BREAKER_BYTES,
-} from '@opendocs/core';
+import { DAILY_QUOTAS, FREE_STORAGE_BYTES, GLOBAL_BREAKER_ALERT_BYTES, GLOBAL_BREAKER_BYTES } from './legacy-limits';
 import { getPrisma } from './db';
 import { ApiError } from './errors';
 import { getPlan } from './plan';

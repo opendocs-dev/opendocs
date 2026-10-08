@@ -1,4 +1,5 @@
-import { CLI_MIN_VERSION, DAILY_QUOTAS, MeResponseSchema } from '@opendocs/core';
+import { CLI_MIN_VERSION, MeResponseSchema } from '@opendocs/core';
+import { DAILY_QUOTAS } from '../legacy-limits';
 import { Value } from '@sinclair/typebox/value';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
@@ -47,7 +48,7 @@ afterAll(async () => {
   await cleanDatabase();
 });
 
-test('valid key returns workspace, plan, quota, min CLI version', async () => {
+test('valid key returns workspace, quota, min CLI version', async () => {
   const app = createApp(async () => {});
   const { key, organization } = await mintKey(app);
 
@@ -58,7 +59,6 @@ test('valid key returns workspace, plan, quota, min CLI version', async () => {
   expect(Value.Check(MeResponseSchema, body)).toBe(true);
   expect(body).toEqual({
     workspace: { id: organization.id, name: organization.name, slug: organization.slug },
-    plan: 'free',
     quota: { files_left: DAILY_QUOTAS.free.files, bytes_left: DAILY_QUOTAS.free.bytes },
     min_cli_version: CLI_MIN_VERSION,
     site_host: null,
@@ -144,7 +144,7 @@ test("quota left reflects today's usage", async () => {
   });
 });
 
-test('an unknown stored plan falls back to Free instead of failing', async () => {
+test('an unknown stored plan still returns a plan-less me response', async () => {
   const app = createApp(async () => {});
   const { key, organization } = await mintKey(app);
   await prisma.workspaceBilling.create({
@@ -154,8 +154,8 @@ test('an unknown stored plan falls back to Free instead of failing', async () =>
   const response = await getMe(app, { 'x-api-key': key });
 
   expect(response.status).toBe(200);
-  const body = (await response.json()) as { plan: string; quota: { files_left: number } };
-  expect(body.plan).toBe('free');
+  const body = (await response.json()) as { plan?: string; quota: { files_left: number } };
+  expect(body.plan).toBeUndefined();
   expect(body.quota.files_left).toBe(DAILY_QUOTAS.free.files);
 });
 
