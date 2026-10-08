@@ -1,14 +1,13 @@
-// Browser-side chat calls. Kept apart from tenant-api.ts, which imports server-only code (next/headers).
-import type { ChatResponse } from './tenant-api';
+// Browser-side chat calls. Kept apart from site-api.ts, which imports server-only code (next/headers).
+import type { ChatResponse } from './site-api';
 
 export async function sendChatMessage(
-  slug: string,
   message: string,
   visitorId: string,
   conversationId?: string,
 ): Promise<ChatResponse | null> {
   try {
-    const res = await fetch(`/api/v1/site/${encodeURIComponent(slug)}/chat`, {
+    const res = await fetch('/api/v1/site/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -22,8 +21,8 @@ export async function sendChatMessage(
         return {
           conversation_id: conversationId || '',
           message_id: '',
-          status: 'no_match',
-          content: 'You have reached the question limit. Please try again later or contact our team directly.',
+          status: 'limit',
+          content: 'You have reached the question limit for this chat today. Start a new chat or try again tomorrow.',
           sources: [],
         };
       }
@@ -36,14 +35,13 @@ export async function sendChatMessage(
 }
 
 export async function voteChatMessage(
-  slug: string,
   messageId: string,
   helpful: boolean,
   feedback?: string,
   visitorId?: string,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`/api/v1/site/${encodeURIComponent(slug)}/chat/${encodeURIComponent(messageId)}/vote`, {
+    const res = await fetch(`/api/v1/site/chat/${encodeURIComponent(messageId)}/vote`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ helpful, feedback, visitor_id: visitorId }),
