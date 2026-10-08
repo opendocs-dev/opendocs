@@ -6,6 +6,7 @@ import { ApiError } from '../errors';
 import { roleFor } from '../site/role';
 import { refreshSearchDocument } from '../site/search-doc';
 import { imageFor } from './docs';
+import { getInstanceOrg } from '../instance-org';
 
 const unauthorized = (message: string) => new ApiError(403, 'unauthorized', message);
 const invalid = (message: string) => new ApiError(422, 'validation_failed', message);
@@ -13,7 +14,7 @@ const notFound = (message = 'Not found') => new ApiError(404, 'not_found', messa
 
 const requireSessionAndMember = async (request: Request) => {
   const session = await auth.api.getSession({ headers: request.headers });
-  const organizationId = session?.session.activeOrganizationId;
+  const organizationId = session ? (await getInstanceOrg()).id : undefined;
   if (!session || !organizationId) {
     throw new ApiError(401, 'unauthorized', 'A valid session is required');
   }
