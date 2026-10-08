@@ -1,17 +1,14 @@
-import { DAILY_QUOTAS, type Plan } from './legacy-limits';
 import { Elysia, NotFoundError } from 'elysia';
-import { auth, createPersonalOrganization } from './auth';
+import { auth } from './auth';
 import { getPrisma } from './db';
 import { ApiError } from './errors';
+import { joinInstanceOrg } from './instance-org';
 
 const ALLOWED_ROLES = ['owner', 'admin', 'editor'] as const;
 type Role = (typeof ALLOWED_ROLES)[number];
 
 const isValidRole = (role: string): role is Role =>
   ALLOWED_ROLES.includes(role as Role);
-
-const isValidPlan = (plan: string): plan is Plan =>
-  plan in DAILY_QUOTAS;
 
 /**
  * Validates the E2E bypass configuration at boot time if enabled.
@@ -105,12 +102,7 @@ export const e2eLoginRoute = (app?: Elysia) => {
       throw new ApiError(422, 'validation_failed', 'Invalid role: must be owner, admin, or editor');
     }
 
-    const planParam = query.plan ?? 'free';
-    if (typeof planParam !== 'string' || !isValidPlan(planParam)) {
-      throw new ApiError(422, 'validation_failed', 'Invalid plan: must be free, pro, or enterprise');
-    }
-
-    const nextParam = query.next ?? '/dashboard';
+    const nextParam = query.next ?? '/admin';
     if (
       typeof nextParam !== 'string' ||
       !nextParam.startsWith('/') ||
@@ -140,17 +132,19 @@ export const e2eLoginRoute = (app?: Elysia) => {
       });
     }
 
-    // 2. Ensure personal organization exists
-    await createPersonalOrganization(user);
+    // 2. Ensure the user is a member of the instance workspace
+    await joinInstanceOrg(user);
 
     const member = await prisma.member.findFirstOrThrow({
       where: { userId: user.id },
       orderBy: { createdAt: 'asc' },
     });
 
-    const organizationId = member.organizationId;
+    // 3. Create Better-Auth session
+    const authContext = await auth.$context;
+    const sessionRecord = await authContext.internalAdapter.createSession(user.id);
 
-    // 3. Update member role
+    // 4. Update member role (after the session exists: creating a session re-syncs roles from ADMIN_EMAILS)
     if (member.role !== roleParam) {
       await prisma.member.update({
         where: { id: member.id },
@@ -158,23 +152,7 @@ export const e2eLoginRoute = (app?: Elysia) => {
       });
     }
 
-    // 4. Upsert WorkspaceBilling.plan
-    await prisma.workspaceBilling.upsert({
-      where: { organizationId },
-      create: {
-        organizationId,
-        plan: planParam,
-      },
-      update: {
-        plan: planParam,
-      },
-    });
-
-    // 5. Create Better-Auth session
-    const authContext = await auth.$context;
-    const sessionRecord = await authContext.internalAdapter.createSession(user.id);
-
-    // 6. Sign and set session cookie
+    // 5. Sign and set session cookie
     const cookieConfig = authContext.authCookies.sessionToken;
     // Same signing as Better-Auth: base64 HMAC-SHA256 of the token, value URI-encoded.
     const key = await crypto.subtle.importKey(
