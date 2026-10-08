@@ -3,17 +3,22 @@ import { Elysia } from 'elysia';
 import { auth } from '../auth';
 import { resolveOrganizationId, unauthorized } from '../auth-context';
 import { getPrisma } from '../db';
-import { DAILY_QUOTAS } from '../legacy-limits';
-import { getPlan } from '../plan';
+import { getLimits } from '../env';
 import { roleFor } from '../site/role';
 import { touchMemberLastActive } from '../site/session';
 
-const startOfUtcDay = (now: Date) =>
-  new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-
-const siteHostFor = (slug: string): string | null => {
-  const base = process.env.TENANT_BASE_DOMAIN;
-  return base ? `${slug}.${base}` : null;
+/** Live step-image bytes of the workspace: what `STORAGE_QUOTA_BYTES` is measured against. */
+const liveStepBytes = async (organizationId: string): Promise<number> => {
+  const usage = await getPrisma().asset.aggregate({
+    where: {
+      organizationId,
+      kind: 'step',
+      deletedAt: null,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+    },
+    _sum: { bytes: true },
+  });
+  return usage._sum.bytes ?? 0;
 };
 
 export const meRoute = new Elysia().get(
@@ -27,27 +32,24 @@ export const meRoute = new Elysia().get(
     });
     if (!organization) throw unauthorized();
 
-    const plan = await getPlan(organizationId);
-    const quotas = DAILY_QUOTAS[plan];
-
-    const usage = await getPrisma().usageDaily.findUnique({
-      where: { organizationId_day: { organizationId, day: startOfUtcDay(new Date()) } },
-      select: { files: true, bytes: true },
-    });
-
     const result: MeResponse = {
       workspace: { id: organization.id, name: organization.name, slug: organization.slug },
-      quota: {
-        files_left: Math.max(0, quotas.files - (usage?.files ?? 0)),
-        bytes_left: Math.max(0, quotas.bytes - Number(usage?.bytes ?? 0n)),
-      },
       min_cli_version: CLI_MIN_VERSION,
-      site_host: siteHostFor(organization.slug),
     };
+
+    // `quota` only exists when the operator set a storage cap (AC-14).
+    const { storageQuotaBytes } = getLimits();
+    if (storageQuotaBytes > 0) {
+      result.quota = {
+        // The cap is on bytes, not files; files_left stays in the contract shape as "unlimited".
+        files_left: Number.MAX_SAFE_INTEGER,
+        bytes_left: Math.max(0, storageQuotaBytes - (await liveStepBytes(organizationId))),
+      };
+    }
 
     // Add role for session callers only
     const session = await auth.api.getSession({ headers: request.headers });
-    if (session?.session.activeOrganizationId === organizationId) {
+    if (session) {
       void touchMemberLastActive(session.user.id, organizationId);
       const role = await roleFor(session.user.id, organizationId);
       if (role) {
