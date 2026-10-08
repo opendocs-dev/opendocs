@@ -1,4 +1,4 @@
-import { DAILY_QUOTAS, type Plan } from '@opendocs/core';
+import { DAILY_QUOTAS, type Plan } from '../legacy-limits';
 import { Elysia } from 'elysia';
 import { resolveOrganizationId } from '../auth-context';
 import { getPrisma } from '../db';
