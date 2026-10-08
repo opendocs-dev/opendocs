@@ -62,7 +62,7 @@ test('fileUnderCategory creates a suggested category under default policy', asyn
 
 test('fileUnderCategory creates an active category under auto policy', async () => {
   const org = await createOrg();
-  await prisma.workspaceSite.create({
+  await prisma.siteSettings.create({
     data: { organizationId: org.id, siteTitle: org.name, categoryPolicy: 'auto' },
   });
 
