@@ -1,20 +1,17 @@
 import { DEFAULT_MAX_STEPS_PER_RUN } from '@opendocs/core';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
   BASE_URL,
   cleanDatabase,
-  OTHER_GITHUB_ACCOUNT,
+  memoryStorage,
   realFetch,
   signIn,
   type App,
 } from '../../test/helpers';
 import { tinyPng } from '../../test/images';
 import { getPrisma } from '../db';
+import { resetEnvForTest } from '../env';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
 
 const prisma = getPrisma();
 
@@ -30,11 +27,7 @@ type Workspace = {
 };
 
 const newApp = async (): Promise<App> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-runs-'));
-  return createApp(async () => {}, {
-    provider: new LocalDiskProvider(root),
-    accounts: ['local'],
-  });
+  return createApp(async () => {}, memoryStorage());
 };
 
 const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): Promise<Workspace> => {
@@ -149,22 +142,6 @@ test('creates a new run for an existing same-workspace flow', async () => {
   expect(unchanged.latestRunId).toBeNull();
 });
 
-test('rejects flow_id from another workspace with 404', async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  expect((await owner.createRun({})).status).toBe(201);
-  const flow = await prisma.flow.findFirstOrThrow();
-
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-  expect(other.organizationId).not.toBe(owner.organizationId);
-
-  const response = await other.createRun({ flow_id: flow.publicId });
-
-  expect(response.status).toBe(404);
-  expect(await errorCode(response)).toBe('not_found');
-  expect(await prisma.run.count()).toBe(1);
-});
-
 test('adds a step referencing an own-workspace asset', async () => {
   const ws = await workspace(await newApp());
   const sessionId = ((await (await ws.createRun({})).json()) as { session_id: string }).session_id;
@@ -260,22 +237,6 @@ test('a step without redaction is stored as off', async () => {
   expect(run.hasUnredactedStep).toBe(true);
 });
 
-test('rejects an asset from another workspace with 404', async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  const assetId = await owner.upload();
-
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-  const sessionId = ((await (await other.createRun({})).json()) as { session_id: string })
-    .session_id;
-
-  const response = await other.addStep(sessionId, stepBody(assetId));
-
-  expect(response.status).toBe(404);
-  expect(await errorCode(response)).toBe('not_found');
-  expect(await prisma.step.count()).toBe(0);
-});
-
 test('stores title and alt', async () => {
   const ws = await workspace(await newApp());
   const sessionId = ((await (await ws.createRun({})).json()) as { session_id: string }).session_id;
@@ -350,7 +311,7 @@ test('accepts a box without a selector', async () => {
   expect(step.box).toEqual({ x: 4, y: 8, w: 120, h: 32 });
 });
 
-test('accepts the 15th step on Free', async () => {
+test('accepts the 15th step by default', async () => {
   const ws = await workspace(await newApp());
   const sessionId = ((await (await ws.createRun({})).json()) as { session_id: string }).session_id;
   const assetId = await ws.upload();
@@ -366,7 +327,7 @@ test('accepts the 15th step on Free', async () => {
   expect(await prisma.step.count()).toBe(DEFAULT_MAX_STEPS_PER_RUN);
 });
 
-test('rejects the 16th step on Free with 422 step_limit', async () => {
+test('rejects the 16th step by default with 422 step_limit', async () => {
   const ws = await workspace(await newApp());
   const sessionId = ((await (await ws.createRun({})).json()) as { session_id: string }).session_id;
   const assetId = await ws.upload();
@@ -382,24 +343,30 @@ test('rejects the 16th step on Free with 422 step_limit', async () => {
   expect(await prisma.step.count()).toBe(DEFAULT_MAX_STEPS_PER_RUN);
 });
 
-test('a Pro run accepts a 16th step', async () => {
-  const ws = await workspace(await newApp());
-  await prisma.workspaceBilling.create({
-    data: { organizationId: ws.organizationId, plan: 'pro' },
-  });
+test('MAX_STEPS_PER_RUN override refuses the 4th step', async () => {
+  const oldMax = process.env.MAX_STEPS_PER_RUN;
+  process.env.MAX_STEPS_PER_RUN = '3';
+  resetEnvForTest();
 
-  const sessionId = ((await (await ws.createRun({})).json()) as { session_id: string }).session_id;
-  const assetId = await ws.upload();
-  const run = await prisma.run.findUniqueOrThrow({ where: { publicId: sessionId } });
-  const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: assetId } });
+  try {
+    const ws = await workspace(await newApp());
+    const sessionId = ((await (await ws.createRun({})).json()) as { session_id: string }).session_id;
+    const assetId = await ws.upload();
+    const run = await prisma.run.findUniqueOrThrow({ where: { publicId: sessionId } });
+    const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: assetId } });
 
-  await seedSteps(run.id, asset.id, DEFAULT_MAX_STEPS_PER_RUN);
+    await seedSteps(run.id, asset.id, 3);
 
-  const response = await ws.addStep(sessionId, stepBody(assetId));
+    const response = await ws.addStep(sessionId, stepBody(assetId));
 
-  expect(response.status).toBe(201);
-  expect((await response.json()) as { order: number }).toEqual({ order: DEFAULT_MAX_STEPS_PER_RUN + 1 });
-  expect(await prisma.step.count()).toBe(DEFAULT_MAX_STEPS_PER_RUN + 1);
+    expect(response.status).toBe(422);
+    expect(await errorCode(response)).toBe('step_limit');
+    expect(await prisma.step.count()).toBe(3);
+  } finally {
+    if (oldMax === undefined) delete process.env.MAX_STEPS_PER_RUN;
+    else process.env.MAX_STEPS_PER_RUN = oldMax;
+    resetEnvForTest();
+  }
 });
 
 test('adding a step to a compiled run returns 409', async () => {
@@ -428,7 +395,7 @@ test('compiles a run and sets flow.latestRunId', async () => {
 
   expect(response.status).toBe(200);
   const body = (await response.json()) as { url: string };
-  expect(body.url).toBe(`${process.env.BETTER_AUTH_URL}/d/${(await prisma.flow.findFirstOrThrow()).publicId}`);
+  expect(body.url).toBe(`${BASE_URL}/d/${(await prisma.flow.findFirstOrThrow()).publicId}`);
 
   const run = await prisma.run.findUniqueOrThrow({ where: { publicId: sessionId } });
   expect(run.status).toBe('compiled');
@@ -713,22 +680,6 @@ test('compile fills the search document from title, summary and step text', asyn
   expect(rows[0]!.matched).toBe(true);
 });
 
-test("compiling another workspace's run is 404 and changes nothing", async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  const sessionId = ((await (await owner.createRun({})).json()) as { session_id: string }).session_id;
-  const assetId = await owner.upload();
-  expect((await owner.addStep(sessionId, stepBody(assetId))).status).toBe(201);
-
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-  const response = await other.compile(sessionId);
-
-  expect(response.status).toBe(404);
-  const run = await prisma.run.findUniqueOrThrow({ where: { publicId: sessionId } });
-  expect(run.status).toBe("recording");
-  expect((await prisma.flow.findFirstOrThrow()).latestRunId).toBeNull();
-});
-
 test('compile with category creates a suggested category and reports status', async () => {
   const ws = await workspace(await newApp());
   const sessionId = ((await (await ws.createRun({})).json()) as { session_id: string }).session_id;
@@ -753,7 +704,7 @@ test('compile with category creates a suggested category and reports status', as
 
 test('compile with category under auto policy creates active category and reports filed', async () => {
   const ws = await workspace(await newApp());
-  await prisma.workspaceSite.create({
+  await prisma.siteSettings.create({
     data: { organizationId: ws.organizationId, siteTitle: 'Site', categoryPolicy: 'auto' },
   });
 
