@@ -34,17 +34,43 @@ const roleOf = async (email: string) => {
   return (await prisma.member.findFirstOrThrow({ where: { userId: user.id } })).role;
 };
 
-test('first user is owner regardless of ADMIN_EMAILS', async () => {
-  setEnv({ ADMIN_EMAILS: 'someone-else@example.com', ALLOW_SIGNUP: undefined });
+test('a stranger cannot be the first user, even with signup open', async () => {
+  for (const allow of [undefined, 'true']) {
+    setEnv({ ADMIN_EMAILS: 'someone-else@example.com', ALLOW_SIGNUP: allow });
+    const app = createApp(async () => {});
+
+    stubGitHub();
+    const { state, cookie } = await startSignIn(app);
+    const response = await callback(app, `code=${crypto.randomUUID()}&state=${state}`, cookie);
+
+    const location = new URL(response.headers.get('location')!, 'http://localhost');
+    expect(location.searchParams.get('error')).toBe('signup_closed');
+    expect(await prisma.user.count()).toBe(0);
+    expect(await prisma.member.count()).toBe(0);
+  }
+});
+
+test('an ADMIN_EMAILS user first becomes owner, then a stranger is editor when open and refused when closed', async () => {
+  setEnv({ ADMIN_EMAILS: GITHUB_ACCOUNT.email!, ALLOW_SIGNUP: 'true' });
   const app = createApp(async () => {});
-
   await signIn(app);
-
   expect(await roleOf(GITHUB_ACCOUNT.email!)).toBe('owner');
+
+  await signIn(app, OTHER_GITHUB_ACCOUNT);
+  expect(await roleOf(OTHER_GITHUB_ACCOUNT.email!)).toBe('editor');
+
+  await cleanDatabase();
+  setEnv({ ALLOW_SIGNUP: 'false' });
+  await signIn(app);
+  stubGitHub(OTHER_GITHUB_ACCOUNT);
+  const { state, cookie } = await startSignIn(app);
+  const response = await callback(app, `code=${crypto.randomUUID()}&state=${state}`, cookie);
+  expect(new URL(response.headers.get('location')!, 'http://localhost').searchParams.get('error')).toBe('signup_closed');
+  expect(await prisma.user.count()).toBe(1);
 });
 
 test('admin email becomes admin (case-insensitive)', async () => {
-  setEnv({ ADMIN_EMAILS: OTHER_GITHUB_ACCOUNT.email!.toUpperCase() });
+  setEnv({ ADMIN_EMAILS: `${GITHUB_ACCOUNT.email},${OTHER_GITHUB_ACCOUNT.email!.toUpperCase()}` });
   const app = createApp(async () => {});
 
   await signIn(app);
@@ -72,11 +98,11 @@ test('closed signup refuses a stranger with a clear message', async () => {
   expect(await prisma.member.count()).toBe(1);
 });
 
-test('unset ALLOW_SIGNUP is open until the first user exists, then closed', async () => {
-  setEnv({ ALLOW_SIGNUP: undefined });
+test('unset ALLOW_SIGNUP is closed to strangers, before and after the first owner', async () => {
+  setEnv({ ALLOW_SIGNUP: undefined, ADMIN_EMAILS: `admin@example.com,${GITHUB_ACCOUNT.email}` });
   const app = createApp(async () => {});
 
-  expect(await isSignupOpen('anyone@example.com')).toBe(true);
+  expect(await isSignupOpen('anyone@example.com')).toBe(false);
   await signIn(app);
   expect(await isSignupOpen('anyone@example.com')).toBe(false);
   expect(await isSignupOpen('admin@example.com')).toBe(true);
@@ -89,7 +115,7 @@ test('unset ALLOW_SIGNUP is open until the first user exists, then closed', asyn
 });
 
 test('an existing user can still sign in after signup closed', async () => {
-  setEnv({ ALLOW_SIGNUP: undefined });
+  setEnv({ ALLOW_SIGNUP: undefined, ADMIN_EMAILS: GITHUB_ACCOUNT.email! });
   const app = createApp(async () => {});
   await signIn(app);
 
