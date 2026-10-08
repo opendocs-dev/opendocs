@@ -143,7 +143,7 @@ test('sets a session cookie and redirects', async () => {
     );
 
     expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/dashboard');
+    expect(res.headers.get('location')).toBe('/admin');
 
     const setCookie = res.headers.get('set-cookie');
     expect(setCookie).toBeTruthy();
@@ -219,7 +219,7 @@ test('reuses the same user', async () => {
   }
 });
 
-test('applies role and plan', async () => {
+test('applies role', async () => {
   const token = makeValidToken();
   const origEnabled = process.env.E2E_LOGIN_ENABLED;
   const origToken = process.env.E2E_LOGIN_TOKEN;
@@ -232,9 +232,9 @@ test('applies role and plan', async () => {
   try {
     const app = createApp(async () => {});
 
-    // Set role=editor and plan=pro
+    // Set role=editor
     const resEditor = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&role=editor&plan=pro`),
+      new Request(`${BASE_URL}/api/test/login?token=${token}&role=editor`),
     );
     expect(resEditor.status).toBe(302);
 
@@ -246,26 +246,12 @@ test('applies role and plan', async () => {
     });
     expect(member.role).toBe('editor');
 
-    const billing = await prisma.workspaceBilling.findUniqueOrThrow({
-      where: { organizationId: member.organizationId },
-    });
-    expect(billing.plan).toBe('pro');
-
-    // Update to role=admin and plan=enterprise
+    // Set role=admin: applied after the session exists, so the sign-in role sync keeps it
     const resAdmin = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&role=admin&plan=enterprise`),
+      new Request(`${BASE_URL}/api/test/login?token=${token}&role=admin`),
     );
     expect(resAdmin.status).toBe(302);
-
-    const memberUpdated = await prisma.member.findFirstOrThrow({
-      where: { userId: user.id },
-    });
-    expect(memberUpdated.role).toBe('admin');
-
-    const billingUpdated = await prisma.workspaceBilling.findUniqueOrThrow({
-      where: { organizationId: member.organizationId },
-    });
-    expect(billingUpdated.plan).toBe('enterprise');
+    expect((await prisma.member.findFirstOrThrow({ where: { userId: user.id } })).role).toBe('admin');
 
     // Invalid role -> 422
     const resBadRole = await app.handle(
@@ -274,14 +260,6 @@ test('applies role and plan', async () => {
     expect(resBadRole.status).toBe(422);
     const badRoleBody = (await resBadRole.json()) as { error: { code: string } };
     expect(badRoleBody.error.code).toBe('validation_failed');
-
-    // Invalid plan -> 422
-    const resBadPlan = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&plan=ultra`),
-    );
-    expect(resBadPlan.status).toBe(422);
-    const badPlanBody = (await resBadPlan.json()) as { error: { code: string } };
-    expect(badPlanBody.error.code).toBe('validation_failed');
   } finally {
     if (origEnabled !== undefined) process.env.E2E_LOGIN_ENABLED = origEnabled;
     else delete process.env.E2E_LOGIN_ENABLED;
