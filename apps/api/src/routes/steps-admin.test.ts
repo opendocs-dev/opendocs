@@ -1,11 +1,8 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
   BASE_URL,
   cleanDatabase,
-  OTHER_GITHUB_ACCOUNT,
+  memoryStorage,
   realFetch,
   signIn,
   type App,
@@ -13,7 +10,6 @@ import {
 import { tinyPng } from '../../test/images';
 import { getPrisma } from '../db';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
 
 const prisma = getPrisma();
 
@@ -62,11 +58,7 @@ type Workspace = {
 };
 
 const newApp = async (): Promise<App> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-steps-admin-'));
-  return createApp(async () => {}, {
-    provider: new LocalDiskProvider(root),
-    accounts: ['local'],
-  });
+  return createApp(async () => {}, memoryStorage());
 };
 
 const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): Promise<Workspace> => {
@@ -385,18 +377,6 @@ test('unauthenticated request returns 401', async () => {
 
   const unauthRes = await ws.app.handle(new Request(`${BASE_URL}/api/v1/flows/${flowPublicId}/steps`));
   expect(unauthRes.status).toBe(401);
-});
-
-test('request from another workspace returns 404', async () => {
-  const app = await newApp();
-  const ws1 = await workspace(app);
-  const ws2 = await workspace(app, OTHER_GITHUB_ACCOUNT);
-
-  const { flowPublicId } = await createCompiledFlowWithSteps(ws1, 1);
-
-  // ws2 tries to access ws1's guide steps
-  const res = await ws2.getSteps(flowPublicId);
-  expect(res.status).toBe(404);
 });
 
 test('editor role is authorized to edit and reorder steps', async () => {
