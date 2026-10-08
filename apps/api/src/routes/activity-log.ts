@@ -1,10 +1,12 @@
 import { Elysia } from 'elysia';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
-import { getPlan } from '../plan';
 import { normalizeRole } from '../site/role';
 import { requireMember, requireSession } from '../site/session';
 import type { Prisma } from '../../generated/prisma/client';
+
+/** How far back the activity log reaches. */
+const RETENTION_DAYS = 365;
 
 export const activityLogRoute = new Elysia()
   .get('/api/v1/activity-log', async ({ request, query }) => {
@@ -16,10 +18,7 @@ export const activityLogRoute = new Elysia()
       throw new ApiError(403, 'unauthorized', 'Only the owner or an admin can view the activity log');
     }
 
-    const plan = await getPlan(organizationId);
-    const isEnterprise = plan === 'enterprise';
-    const retentionDays = isEnterprise ? 365 : 30;
-    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
     const where: Prisma.AuditLogWhereInput = {
       organizationId,
@@ -81,7 +80,7 @@ export const activityLogRoute = new Elysia()
     const nextCursor = hasMore ? pageRows[pageRows.length - 1]!.id : null;
 
     const userIds = Array.from(
-      new Set(pageRows.filter((r) => r.actorKind === 'user' || r.actorKind === 'staff').map((r) => r.actorId)),
+      new Set(pageRows.filter((r) => r.actorKind === 'user').map((r) => r.actorId)),
     );
 
     const users = await prisma.user.findMany({
@@ -107,8 +106,8 @@ export const activityLogRoute = new Elysia()
           detail: r.detail,
         };
       }),
-      retention_days: retentionDays,
-      can_export: isEnterprise,
+      retention_days: RETENTION_DAYS,
+      can_export: true,
       next_cursor: nextCursor,
       has_more: hasMore,
     };
@@ -122,12 +121,7 @@ export const activityLogRoute = new Elysia()
       throw new ApiError(403, 'unauthorized', 'Only the owner or an admin can export the activity log');
     }
 
-    const plan = await getPlan(organizationId);
-    if (plan !== 'enterprise') {
-      throw new ApiError(403, 'unauthorized', 'Export CSV is an Enterprise feature');
-    }
-
-    const cutoff = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
     const prisma = getPrisma();
 
     const rows = await prisma.auditLog.findMany({
@@ -140,7 +134,7 @@ export const activityLogRoute = new Elysia()
     });
 
     const userIds = Array.from(
-      new Set(rows.filter((r) => r.actorKind === 'user' || r.actorKind === 'staff').map((r) => r.actorId)),
+      new Set(rows.filter((r) => r.actorKind === 'user').map((r) => r.actorId)),
     );
 
     const users = await prisma.user.findMany({
