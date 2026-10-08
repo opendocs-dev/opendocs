@@ -10,6 +10,12 @@ describe('health route', () => {
     expect(await response.json()).toEqual({ status: 'ok', db: 'up' });
   });
 
+  test('answers on /api/health as well', async () => {
+    const response = await createApp(async () => {}).handle(new Request('http://localhost/api/health'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok', db: 'up' });
+  });
+
   test('returns 503 when DB unreachable', async () => {
     const response = await createApp(async () => {
       throw new Error('offline');
