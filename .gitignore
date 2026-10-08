@@ -5,3 +5,6 @@ bin/
 .env
 .env.*
 .DS_Store
+!.env.example
+.next/
+out/
