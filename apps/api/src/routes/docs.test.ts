@@ -1,12 +1,8 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
-import { BASE_URL, cleanDatabase, realFetch, signIn, type App } from '../../test/helpers';
+import { BASE_URL, cleanDatabase, memoryStorage, realFetch, signIn, type App } from '../../test/helpers';
 import { tinyPng } from '../../test/images';
 import { getPrisma } from '../db';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
 
 const prisma = getPrisma();
 
@@ -20,11 +16,7 @@ type Workspace = {
 };
 
 const newApp = async (): Promise<App> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-docs-'));
-  return createApp(async () => {}, {
-    provider: new LocalDiskProvider(root),
-    accounts: ['local'],
-  });
+  return createApp(async () => {}, memoryStorage());
 };
 
 const workspace = async (app: App): Promise<Workspace> => {
@@ -122,7 +114,7 @@ test('returns ordered steps with image size', async () => {
   expect(body.steps[0]!.instruction).toBe('Step one');
   expect(body.steps[0]!.selector).toBe('#save');
   expect(body.steps[0]!.image).toEqual({
-    url: `${process.env.ASSET_BASE_URL}/i/${assetId}`,
+    url: `${BASE_URL}/api/i/${assetId}`,
     expired: false,
     width: asset.width,
     height: asset.height,
@@ -206,7 +198,7 @@ test('returns markdown with ordered steps', async () => {
   expect(response.headers.get('x-robots-tag')).toBe('noindex');
 
   const body = await response.text();
-  const imageUrl = `${process.env.ASSET_BASE_URL}/i/${assetId}`;
+  const imageUrl = `${BASE_URL}/api/i/${assetId}`;
   expect(body).toBe(
     [
       '# Reset a password',
@@ -274,7 +266,7 @@ test('md export uses title and alt', async () => {
 
   const flow = await prisma.flow.findFirstOrThrow();
   const body = await (await getMarkdown(ws.app, flow.publicId)).text();
-  const imageUrl = `${process.env.ASSET_BASE_URL}/i/${assetId}`;
+  const imageUrl = `${BASE_URL}/api/i/${assetId}`;
 
   expect(body).toContain('## Step 1: Save the form');
   expect(body).toContain(`![Screenshot of the save button](${imageUrl})`);
@@ -289,7 +281,7 @@ test('alt with brackets and newline is escaped', async () => {
 
   const flow = await prisma.flow.findFirstOrThrow();
   const body = await (await getMarkdown(ws.app, flow.publicId)).text();
-  const imageUrl = `${process.env.ASSET_BASE_URL}/i/${assetId}`;
+  const imageUrl = `${BASE_URL}/api/i/${assetId}`;
 
   expect(body).toContain(`![Click \\[Save\\] \\(now\\)](${imageUrl})`);
 });
@@ -303,7 +295,7 @@ test('alt ending in a backslash cannot escape the closing bracket', async () => 
 
   const flow = await prisma.flow.findFirstOrThrow();
   const body = await (await getMarkdown(ws.app, flow.publicId)).text();
-  const imageUrl = `${process.env.ASSET_BASE_URL}/i/${assetId}`;
+  const imageUrl = `${BASE_URL}/api/i/${assetId}`;
 
   expect(body).toContain(`![Open C:\\\\](${imageUrl})`);
 });
