@@ -1,6 +1,6 @@
 import {
   AssetUploadResponseSchema,
-  DRAFT_IMAGE_DAYS,
+  DEFAULT_DRAFT_IMAGE_DAYS,
   MAX_BYTES,
   MAX_PIXELS,
   SNAP_TTL,
@@ -142,11 +142,11 @@ const readDimensions = async (bytes: Uint8Array): Promise<{ width: number; heigh
   }
 };
 
-/** A step image is a draft until its run is compiled, expiring after DRAFT_IMAGE_DAYS days;
+/** A step image is a draft until its run is compiled, expiring after DEFAULT_DRAFT_IMAGE_DAYS days;
  * compiling makes it permanent. Snaps follow the requested TTL regardless of plan. Brand
  * images (site/guide SEO) never expire. */
 const expiryFor = (kind: Kind, ttl: SnapTtl, now: Date): Date | null => {
-  if (kind === 'step') return new Date(now.getTime() + DRAFT_IMAGE_DAYS * 86_400_000);
+  if (kind === 'step') return new Date(now.getTime() + DEFAULT_DRAFT_IMAGE_DAYS * 86_400_000);
   if (kind === 'brand') return null;
   return new Date(now.getTime() + SNAP_TTL.seconds[ttl] * 1000);
 };
