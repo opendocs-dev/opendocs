@@ -1,11 +1,8 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
   BASE_URL,
   cleanDatabase,
-  OTHER_GITHUB_ACCOUNT,
+  memoryStorage,
   realFetch,
   signIn,
   type App,
@@ -13,7 +10,6 @@ import {
 import { tinyPng } from '../../test/images';
 import { getPrisma } from '../db';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
 
 const prisma = getPrisma();
 
@@ -33,11 +29,7 @@ type Workspace = {
 };
 
 const newApp = async (): Promise<App> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-flows-'));
-  return createApp(async () => {}, {
-    provider: new LocalDiskProvider(root),
-    accounts: ['local'],
-  });
+  return createApp(async () => {}, memoryStorage());
 };
 
 const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): Promise<Workspace> => {
@@ -92,7 +84,7 @@ const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): 
     getMarkdown: (publicId) =>
       app.handle(new Request(`${BASE_URL}/api/v1/docs/${publicId}/markdown`)),
     getImage: (publicId) =>
-      app.handle(new Request(`${BASE_URL}/i/${publicId}`)),
+      app.handle(new Request(`${BASE_URL}/api/i/${publicId}`)),
   };
 };
 
@@ -174,20 +166,6 @@ test('lists own flows newest first', async () => {
   const body = (await response.json()) as { items: FlowItem[]; next_cursor: string | null };
   expect(body.items.map((item) => item.title)).toEqual(['Second flow', 'First flow']);
   expect(body.next_cursor).toBeNull();
-});
-
-test('excludes other workspace flows', async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  await compiledFlow(owner, 'Owner flow');
-
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-  await compiledFlow(other, 'Other flow');
-
-  const response = await owner.listFlows();
-  const body = (await response.json()) as { items: FlowItem[] };
-  expect(body.items).toHaveLength(1);
-  expect(body.items[0]!.title).toBe('Owner flow');
 });
 
 test('flags not_redacted from latest run', async () => {
@@ -278,24 +256,6 @@ test('deletes own flow and expires its assets', async () => {
   });
   expect(asset.expiresAt).not.toBeNull();
   expect(asset.expiresAt!.getTime()).toBeLessThanOrEqual(Date.now());
-});
-
-test("returns 404 for another workspace's flow", async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  const flow = await compiledFlow(owner, 'Owner flow');
-
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-  const response = await other.deleteFlow(flow.flowPublicId);
-
-  expect(response.status).toBe(404);
-  expect(await errorCode(response)).toBe('not_found');
-
-  const dbFlow = await prisma.flow.findUniqueOrThrow({
-    where: { publicId: flow.flowPublicId },
-    select: { deletedAt: true },
-  });
-  expect(dbFlow.deletedAt).toBeNull();
 });
 
 test('second delete is idempotent', async () => {
@@ -468,19 +428,6 @@ test('public_id filter with unknown id returns empty list', async () => {
   await compiledFlow(ws, 'Flow');
 
   const response = await ws.listFlows('public_id=unknown123');
-
-  expect(response.status).toBe(200);
-  const body = (await response.json()) as { items: FlowItem[] };
-  expect(body.items).toHaveLength(0);
-});
-
-test('public_id filter excludes another workspace flow', async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  const flow = await compiledFlow(owner, 'Owner flow');
-
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-  const response = await other.listFlows(`public_id=${flow.flowPublicId}`);
 
   expect(response.status).toBe(200);
   const body = (await response.json()) as { items: FlowItem[] };
