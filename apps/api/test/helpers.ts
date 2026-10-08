@@ -1,8 +1,9 @@
 import { expect } from 'bun:test';
 import { getPrisma } from '../src/db';
 import type { createApp } from '../src/index';
+import type { Storage } from '../src/storage/provider';
 
-export const BASE_URL = process.env.BETTER_AUTH_URL ?? 'http://localhost:3100';
+export const BASE_URL = process.env.PUBLIC_URL ?? 'http://localhost:3100';
 
 const prisma = getPrisma();
 export const realFetch = globalThis.fetch;
@@ -42,32 +43,45 @@ export const fakeAccessToken = () => ['gho', crypto.randomUUID().replace(/-/g, '
 export const fakeApiKey = () => ['od', crypto.randomUUID().replace(/-/g, '')].join('_');
 
 export const cleanDatabase = async () => {
-  await prisma.billingEvent.deleteMany();
-  await prisma.aiGap.deleteMany();
   await prisma.aiMessage.deleteMany();
   await prisma.aiConversation.deleteMany();
-  await prisma.aiCreditLedger.deleteMany();
-  await prisma.aiAssistant.deleteMany();
-  await prisma.report.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.analyticsDaily.deleteMany();
   await prisma.searchLog.deleteMany();
-  await prisma.storageConnection.deleteMany();
   await prisma.step.deleteMany();
   await prisma.run.deleteMany();
   await prisma.flow.deleteMany();
+  await prisma.siteSettings.deleteMany();
   await prisma.asset.deleteMany();
-  await prisma.workspaceBilling.deleteMany();
-  await prisma.workspaceSite.deleteMany();
-  await prisma.usageDaily.deleteMany();
   await prisma.apikey.deleteMany();
-  await prisma.invitation.deleteMany();
   await prisma.member.deleteMany();
   await prisma.organization.deleteMany();
   await prisma.session.deleteMany();
   await prisma.account.deleteMany();
   await prisma.verification.deleteMany();
   await prisma.user.deleteMany();
+};
+
+/** In-memory Storage for tests: nothing leaves the process and every object is inspectable. */
+export const memoryStorage = (): Storage & { objects: Map<string, Uint8Array> } => {
+  const objects = new Map<string, Uint8Array>();
+  return {
+    objects,
+    upload: async (bytes) => {
+      const fileId = crypto.randomUUID();
+      objects.set(fileId, new Uint8Array(bytes));
+      return { fileId };
+    },
+    read: async (fileId) => {
+      const bytes = objects.get(fileId);
+      if (!bytes) throw new Error(`no such object: ${fileId}`);
+      return new Uint8Array(bytes);
+    },
+    delete: async (fileId) => {
+      objects.delete(fileId);
+    },
+    check: async () => {},
+  };
 };
 
 /** Answers GitHub's OAuth endpoints; anything else falls through to the real fetch. */
