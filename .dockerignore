@@ -1,0 +1,44 @@
+# Version control and IDE metadata
+.git
+.github
+.gitignore
+.DS_Store
+
+# Dependencies (at any depth)
+node_modules
+**/node_modules
+
+# Next.js build artifacts and caches
+.next
+**/.next
+dist
+**/dist
+out
+**/out
+.turbo
+**/.turbo
+
+# Rebuilt Prisma client outputs
+apps/api/generated
+**/generated
+
+# Environment variable files
+.env*
+**/.env*
+
+# Documentation (docs live in Obsidian vault)
+docs
+**/docs
+
+# Test artifacts and coverage
+coverage
+**/coverage
+test-results
+**/test-results
+*.test.ts
+*.test.tsx
+**/*.test.ts
+**/*.test.tsx
+apps/api/test
+**/test
+!packages/core/test
