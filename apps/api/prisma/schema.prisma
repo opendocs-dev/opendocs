@@ -1,0 +1,715 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// Better-Auth core models
+// ==========================================
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+  /// Account settings (C14-AC25): notify this user by email about activity. Display-only today, no sender wired yet.
+  emailNotifications   Boolean  @default(true)
+  /// UI-A15 Finding 5: four email notification preferences
+  notifyWeeklyDigest   Boolean  @default(true)
+  notifyAiCredits      Boolean  @default(true)
+  notifyContentGaps    Boolean  @default(true)
+  notifyInviteAccepted Boolean  @default(true)
+  /// AC-34 Platform staff role: "admin", "support", or null.
+  staffRole          String?
+  /// AC-34 Two-step sign-in status (two-factor auth).
+  twoFactorEnabled   Boolean @default(false)
+
+  sessions    Session[]
+  accounts    Account[]
+  members     Member[]
+  invitations Invitation[]
+}
+
+model Session {
+  id                   String   @id
+  expiresAt            DateTime
+  token                String   @unique
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  ipAddress            String?
+  userAgent            String?
+  userId               String
+  activeOrganizationId String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  /// Finding 4: GitHub login / username handle for the sign-in card.
+  username              String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@index([identifier])
+}
+
+// ==========================================
+// Better-Auth organization plugin models
+// ==========================================
+
+model Organization {
+  id           String    @id
+  name         String
+  slug         String    @unique
+  logo         String?
+  createdAt    DateTime  @default(now())
+  metadata     String?
+  suspendedAt  DateTime?
+
+  members            Member[]
+  invitations        Invitation[]
+  assets             Asset[]
+  flows              Flow[]
+  billing            WorkspaceBilling?
+  site               WorkspaceSite?
+  siteAddressHistory SiteAddressHistory[]
+  categories         Category[]
+  storageConnections StorageConnection[]
+  auditLogs          AuditLog[]
+  reports            Report[]
+  searchLogs         SearchLog[]
+  aiAssistant        AiAssistant?
+  aiCreditLedgers    AiCreditLedger[]
+  aiConversations    AiConversation[]
+  aiGaps             AiGap[]
+}
+
+model Member {
+  id             String   @id
+  organizationId String
+  userId         String
+  /// "owner", "admin" or "editor" (legacy "member" is read as editor; C18 D2).
+  role           String    @default("editor")
+  createdAt      DateTime  @default(now())
+  /// UI-A14 finding 4: last active timestamp, updated at most once per hour on API use.
+  lastActiveAt   DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Invitation {
+  id             String   @id
+  organizationId String
+  email          String
+  role           String?
+  status         String   @default("pending")
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  inviterId      String
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inviter      User         @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+// ==========================================
+// Better-Auth API key plugin model
+// ==========================================
+
+/// Keys are organization-owned: `referenceId` is an Organization id (`references: "organization"`).
+/// The Prisma client property must stay `apikey` to match the plugin's model name.
+model Apikey {
+  id                  String    @id
+  configId            String    @default("default")
+  name                String?
+  start               String?
+  referenceId         String
+  prefix              String?
+  key                 String
+  refillInterval      Int?
+  refillAmount        Int?
+  lastRefillAt        DateTime?
+  enabled             Boolean   @default(true)
+  rateLimitEnabled    Boolean   @default(true)
+  rateLimitTimeWindow Int?      @default(86400000)
+  rateLimitMax        Int?      @default(10)
+  requestCount        Int       @default(0)
+  remaining           Int?
+  lastRequest         DateTime?
+  expiresAt           DateTime?
+  createdAt           DateTime
+  updatedAt           DateTime
+  permissions         String?
+  metadata            String?
+  /// Set when the key is created with `termsAccepted: true` (C1-AC04).
+  termsAcceptedAt     DateTime?
+
+  @@index([configId])
+  @@index([referenceId])
+  @@index([key])
+}
+
+// ==========================================
+// Assets and usage
+// ==========================================
+
+/// One stored image. `publicId` is the base62 id served at `/i/{publicId}`; the
+/// `provider*` columns say where the bytes actually live so a later provider can
+/// coexist with the ones written today.
+model Asset {
+  id             String    @id @default(uuid())
+  publicId       String    @unique
+  organizationId String
+  /// "snap" (short-lived share), "step" (doc image) or "brand" (site/guide SEO image, no expiry).
+  kind           String
+  provider       String
+  providerAccount String
+  providerFileId String
+  /// Taken from the magic bytes, never from the request header.
+  mime           String
+  bytes          Int
+  width          Int
+  height         Int
+  sha256         String
+  expiresAt      DateTime?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  steps        Step[]
+  faviconFor   WorkspaceSite[] @relation("WorkspaceSiteFavicon")
+  ogFor        WorkspaceSite[] @relation("WorkspaceSiteOg")
+
+  @@index([organizationId])
+}
+
+/// Per-workspace daily upload counters, keyed by UTC date.
+model UsageDaily {
+  organizationId String
+  day            DateTime @db.Date
+  files          Int      @default(0)
+  bytes          BigInt   @default(0)
+
+  @@id([organizationId, day])
+  // The global breaker sums one day across every workspace on each upload.
+  @@index([day])
+}
+
+// ==========================================
+// Recording: flows, runs and steps
+// ==========================================
+
+/// One document being recorded over time. `latestRunId` points at the run whose
+/// compile last published the flow, so it stays null until a compile happens.
+model Flow {
+  id             String    @id @default(uuid())
+  publicId       String    @unique
+  organizationId String
+  title          String
+  locale         String    @default("en")
+  latestRunId    String?
+  createdBy      String?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  lastRunAt      DateTime  @default(now())
+  /// Public address on the tenant site; set at first compile, never changes with the title (C16 D2).
+  slug           String?
+  summary        String?
+  /// "published", "unlisted" or "draft" (C16 D1).
+  visibility     String    @default("published")
+  /// Full-text document: title (A), summary (B), latest run's step text (C), 'simple' config. Filled by compile.
+  search         Unsupported("tsvector")?
+  /// Null = uncategorized. A deleted category leaves its guides uncategorized (C17 D6).
+  categoryId     String?
+  /// Page title for search engines and link previews; null = use title (C14-AC09).
+  seoTitle       String?
+  /// Page description for search engines and link previews; null = use summary (C14-AC09).
+  seoDescription String?
+  /// Per-guide opt-out of indexing, independent of visibility (C14-AC09).
+  noindex        Boolean   @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category     Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  runs         Run[]
+  analytics    AnalyticsDaily[]
+  reports      Report[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@index([organizationId, lastRunAt])
+  @@index([search], type: Gin)
+  @@index([categoryId])
+}
+
+/// One recording session against a Flow. `publicId` is the `session_id` the CLI holds.
+model Run {
+  id                String    @id @default(uuid())
+  publicId          String    @unique
+  flowId            String
+  /// "recording" while steps are accepted, "compiled" once the run is closed.
+  status            String    @default("recording")
+  cliVersion        String?
+  startedAt         DateTime  @default(now())
+  compiledAt        DateTime?
+  /// Set once any of this run's steps is stored with redaction mode "off".
+  hasUnredactedStep Boolean   @default(false)
+
+  flow  Flow   @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  steps Step[]
+}
+
+/// One captured step. `order` is 1-based and unique per run, so a concurrent second
+/// writer fails rather than duplicating a position.
+model Step {
+  id              String   @id @default(uuid())
+  runId           String
+  order           Int
+  /// "click", "type", "navigate" or "other".
+  action          String
+  selector        String?
+  box             Json?
+  instruction     String
+  title           String?
+  alt             String?
+  pageUrl         String?
+  /// Null once the image row is gone; the step text still renders (ADR rule 3).
+  assetId         String?
+  redactionMode   String?
+  redactionReport Json?
+  hidden          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  run   Run   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // SetNull, not Restrict: deleting a workspace cascades to its assets, and Restrict (or
+  // NoAction, checked per cascade statement) would reject that.
+  asset Asset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  @@unique([runId, order])
+}
+
+/// Plan and Polar linkage for one workspace. A workspace with no row is on Free.
+model WorkspaceBilling {
+  organizationId       String    @id
+  plan                 String    @default("free")
+  polarCustomerId      String?
+  polarSubscriptionId  String?
+  status               String?
+  periodEnd            DateTime?
+  cancelAtPeriodEnd    Boolean   @default(false)
+  lastModifiedAt       DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// Webhook idempotency ledger for Polar billing events.
+model BillingEvent {
+  eventId    String   @id
+  receivedAt DateTime @default(now())
+}
+
+// ==========================================
+// Site foundation (C15)
+// ==========================================
+
+/// One public site config per workspace.
+model WorkspaceSite {
+  organizationId String   @id
+  siteTitle      String
+  tagline        String   @default("")
+  preset         String   @default("sage")
+  /// Custom branding overrides (Enterprise only; C14-AC11). Null = use preset defaults.
+  accent         String?
+  mark           String?
+  font           String?
+  radius         Int?
+  indexing       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  /// UTC day of the last address change and how many happened that day (limit 3).
+  addressChangeDay   DateTime?
+  addressChangeCount Int      @default(0)
+  /// "suggest" (an agent's new category waits for acceptance) or "auto" (C17 D2).
+  categoryPolicy     String   @default("suggest")
+  /// Own domain the tenant wants to serve the site on (C14-AC12). Null = none set.
+  customDomain   String?   @unique
+  /// "verified" (DNS-verified only, see routes.ts for why), "waiting_dns", "cert_failing"
+  /// (reachable; unused until a TLS mechanism is chosen) or "blocked"; null = no customDomain.
+  domainStatus   String?
+  /// Unused until certificate issuance is wired up; column reserved so that work is additive.
+  certExpiresAt  DateTime?
+  lastCheckedAt  DateTime?
+  /// Which StorageConnection kind ("gdrive" or "s3") new uploads use; null = OpenDocs
+  /// storage (Free, or Pro/Enterprise with no connection active yet). AC-21.
+  storageKind    String?
+  /// Page description for search engines and link previews; "" = none set (C14-AC13).
+  description    String    @default("")
+  /// Favicon image; null = the platform default (C14-AC13).
+  faviconAssetId String?
+  /// Default share image for pages that have none of their own; null = no custom image (C14-AC13).
+  ogAssetId      String?
+  /// Extra `<meta name content>` pairs for a custom domain only; [] = none ("scripts rejected" rule, C14-AC13).
+  customMeta     Json      @default("[]")
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  faviconAsset  Asset?       @relation("WorkspaceSiteFavicon", fields: [faviconAssetId], references: [id], onDelete: SetNull)
+  ogAsset       Asset?       @relation("WorkspaceSiteOg", fields: [ogAssetId], references: [id], onDelete: SetNull)
+}
+
+// ==========================================
+// Storage admin (AC-21)
+// ==========================================
+
+/// A workspace's own storage destination. One row per (organizationId, kind); which
+/// kind is active for new uploads is `WorkspaceSite.storageKind`, so a workspace can
+/// hold a Drive row and an S3 row (e.g. while switching) without either being live.
+model StorageConnection {
+  id             String    @id @default(uuid())
+  organizationId String
+  /// "gdrive" or "s3".
+  kind           String
+  /// Non-secret settings: Drive {folderId}, S3 {endpoint, region, bucket, prefix, pathStyle}.
+  config         Json
+  /// AES-256-GCM, base64 "iv:ciphertext:tag": Drive OAuth refresh token or S3 keys JSON.
+  /// Decrypted only to call the provider; never returned by the API once saved.
+  secret         String
+  /// "connected" (last test passed), "failed" (last test or upload failed) or
+  /// "untested" (saved, never tested). Never silently falls back to OpenDocs storage
+  /// on failure (Contract Decisions 2026-10-01) — the admin UI must warn instead.
+  status         String    @default("untested")
+  lastTestedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, kind])
+  @@index([organizationId])
+}
+
+/// A slug an organization used to hold. Lets an old address redirect (or free up)
+/// after the organization moves to a new one.
+model SiteAddressHistory {
+  slug           String   @id
+  organizationId String
+  retiredAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+/// Slugs no workspace may claim (system routes, the brand, known phishing targets).
+model ReservedName {
+  name   String @id
+  reason String
+}
+
+// ==========================================
+// Categories (C17)
+// ==========================================
+
+/// A short list per workspace that guides are filed under. Readers see only `active` ones (C17 D4).
+model Category {
+  id             String   @id @default(uuid())
+  organizationId String
+  slug           String
+  name           String
+  description    String   @default("")
+  position       Int      @default(0)
+  /// "active" or "suggested" (created by an agent, waiting for the owner).
+  status         String   @default("active")
+  /// "user" or "agent".
+  source         String   @default("user")
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  flows        Flow[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, position])
+}
+
+// ==========================================
+// Audit log & Activity log (AC-30, AC-34)
+// ==========================================
+
+/// Feeds tenant activity log (AC-30) and platform staff audit log (AC-34).
+/// Read-only: cannot be modified or deleted via UI or API.
+model AuditLog {
+  id             String    @id @default(uuid())
+  /// "user", "apikey", or "staff"
+  actorKind      String
+  actorId        String
+  /// null for platform-only actions; set for workspace tenant actions
+  organizationId String?
+  action         String
+  /// JSON details: e.g. actorName, actorEmail, targetName, etc.
+  detail         Json      @default("{}")
+  createdAt      DateTime  @default(now())
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([actorKind, createdAt])
+}
+// Analytics (C14 AC-29, AC-04, AC-07)
+// ==========================================
+
+/// Aggregated daily counts per flow (C14b). Counts only, no visitor identifier or cookies.
+model AnalyticsDaily {
+  flowId     String
+  day        DateTime @db.Date
+  views      Int      @default(0)
+  searches   Int      @default(0)
+  helpfulYes Int      @default(0)
+  helpfulNo  Int      @default(0)
+
+  flow Flow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@id([flowId, day])
+  @@index([day])
+  @@index([flowId])
+}
+
+/// Aggregated daily search queries per workspace (C14b).
+model SearchLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  day            DateTime @db.Date
+  query          String
+  results        Int      @default(0)
+  times          Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, day, query])
+  @@index([organizationId, day])
+}
+
+// ==========================================
+// AI Assistant (C20, AC-18..AC-23)
+// ==========================================
+
+/// Konfigurasi AI Assistant per workspace (AC-19)
+model AiAssistant {
+  organizationId     String   @id
+  enabled            Boolean  @default(false)
+  name               String   @default("AI Assistant")
+  buttonLabel        String   @default("Ask AI")
+  welcome            String   @default("How can I help you today?")
+  suggested          Json     @default("[]") // string[] maks 4
+  tone               String   @default("friendly") // friendly, concise, formal
+  language           String   @default("auto") // auto, id, en
+  sourceMode         String   @default("all") // all, categories
+  sourceCategoryIds  Json     @default("[]") // string[]
+  excludedFlowIds    Json     @default("[]") // string[]
+  noMatchMode        String   @default("contact") // contact, email, hide
+  contactTarget      String   @default("") // url or email
+  offTopicRefusal    Boolean  @default(true)
+  showSources        Boolean  @default(true)
+  hourlyPerVisitor   Int      @default(30)
+  dailyCap           Int      @default(500)
+  retentionDays      Int      @default(30)
+  maskPii            Boolean  @default(true)
+  position           String   @default("bottom-right") // bottom-right, bottom-left
+  modelId            String?
+  byoEnabled         Boolean  @default(false)
+  byoProvider        String?  // anthropic, openai, compatible
+  byoBaseUrl         String?
+  byoModel           String?
+  byoSecret          String?  // encrypted AES-256-GCM
+  byoFallbackCredits Boolean  @default(false) // fallback hanya ke provider yang sama (RB1)
+  embedOrigins       Json     @default("[]") // string[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+/// Ledger transaksi kredit AI per tenant dengan saldo terhitung (AC-19, AC-23)
+model AiCreditLedger {
+  id             String   @id @default(uuid())
+  organizationId String
+  delta          Int      // positif (grant/reset/refund) atau negatif (reservation/charge)
+  reason         String   // monthly_reset, admin_grant, reply_reservation, reply_charge, reply_reservation_cancelled, reply_reservation_expired, reply_refund, purchase
+  messageId      String?  // ID pesan atau reservationId untuk tracking idempotensi
+  orderId        String?  @unique
+  modelId        String?
+  credits        Int
+  balanceAfter   Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, messageId])
+  /// Constraint unik scoped tenant untuk idempotensi refund dan transaksi atomik (RB2a)
+  @@unique([organizationId, messageId, reason])
+}
+
+/// Sesi percakapan pengunjung reader (AC-20)
+model AiConversation {
+  id             String      @id @default(uuid())
+  organizationId String
+  visitorId      String      // UUID acak anonim disimpan di localStorage pengunjung
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt // diperbarui tiap ada pesan baru; basis retensi (S2)
+  messages       AiMessage[]
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, updatedAt])
+  @@index([organizationId, visitorId])
+}
+
+/// Pesan interaksi dalam sesi percakapan (AC-18, AC-20)
+model AiMessage {
+  id             String         @id @default(uuid())
+  conversationId String
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String         // user, assistant
+  content        String
+  citedFlowIds   Json           @default("[]") // string[]
+  answered       Boolean        @default(true)
+  rating         String?        // helpful, unhelpful
+  feedback       String?
+  tokensUsed     Int            @default(0)
+  modelId        String?
+  createdAt      DateTime       @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+/// Pertanyaan yang tidak terjawab / content gaps (AC-20, SN2)
+model AiGap {
+  id             String   @id @default(uuid())
+  organizationId String
+  query          String   // wajib dinormalisasi: trim, lowercase, collapse whitespace (SN2)
+  count          Int      @default(1)
+  status         String   @default("open") // open, recorded, dismissed
+  flowId         String?  // jika dijadikan panduan
+  lastSeenAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, query])
+  @@index([organizationId, status, count])
+}
+
+/// Batas kuota AI dan konfigurasi fitur per plan (C14b, AC-23)
+model PlanConfig {
+  plan           String   @id // free, pro, enterprise
+  monthlyCredits Int      @default(0)
+  byokAllowed    Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+/// Katalog model AI yang dikelola platform staff (AC-22)
+model AiModel {
+  id              String   @id @default(uuid())
+  provider        String   // anthropic, openai, compatible
+  modelId         String   // e.g. gpt-luna, claude-sonnet-5-5
+  name            String   // e.g. GPT Luna, Claude Sonnet
+  label           String   // Standard / Advanced
+  creditsPerReply Int      @default(1) // 1 untuk Standard, 5 untuk Advanced
+  plans           Json     @default("[\"pro\",\"enterprise\"]") // string[]
+  status          String   @default("active") // active, hidden, retired
+  isDefault       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/// Provider credentials platform yang dikelola staff (AC-22)
+model AiProvider {
+  provider     String    @id // anthropic, openai, compatible
+  baseUrl      String?
+  secret       String    // encrypted API key
+  status       String    @default("active")
+  lastTestedAt DateTime?
+  updatedAt    DateTime  @updatedAt
+}
+
+/// Pengaturan global platform AI (AC-23)
+model AiPlatformSettings {
+  id                      String   @id @default("global")
+  aiEnabled               Boolean  @default(true)
+  spendCapMonthly         Float    @default(500.0) // USD
+  currentMonthSpend       Float    @default(0.0)
+  alertPercent            Int      @default(80)
+  pauseAtCap              Boolean  @default(true)
+  creditOverageAction     String   @default("stop") // stop, add_credits
+  chargeOnlyWhenDelivered Boolean  @default(true)
+  updatedAt               DateTime @updatedAt
+}
+
+// ==========================================
+// Abuse and Takedown Reports (UI-P6, AC-32)
+// ==========================================
+
+model Report {
+  id                        String    @id @default(uuid())
+  type                      String    // phishing, copyright, personal_data, spam, other
+  status                    String    @default("new") // new, in_review, actioned, dismissed
+  text                      String
+  reporterEmail             String?
+  reporterEmailRevealedAt   DateTime?
+  revealedByStaffId         String?
+  organizationId            String?
+  flowId                    String?
+  guideSlug                 String?
+  guideAddress              String
+  tenantName                String?
+  tenantSlug                String?
+  notes                     String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @default(now()) @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  flow         Flow?         @relation(fields: [flowId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([organizationId])
+  @@index([flowId])
+}
+
