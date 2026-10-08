@@ -35,7 +35,7 @@ export function visibilityTone(visibility: string | undefined): 'ok' | 'warn' | 
 
 /**
  * Returns a public link for a guide, or null if no link is available.
- * For published/unlisted guides with a slug and siteHost, returns the public page URL.
+ * For published/unlisted guides with a slug, returns the public page URL.
  * Otherwise returns the guide's url only when it's an http(s) URL.
  */
 export function publicLink(
@@ -45,15 +45,13 @@ export function publicLink(
     visibility?: string;
     url?: string | null;
   },
-  siteHost: string | null | undefined,
 ): string | null {
-  // Check if it's published or unlisted with a slug and siteHost
+  // Check if it's published or unlisted with a slug
   if (
     (guide.visibility === 'published' || guide.visibility === 'unlisted') &&
-    siteHost &&
     guide.slug
   ) {
-    return `https://${siteHost}/g/${guide.slug}`;
+    return `/g/${guide.slug}`;
   }
 
   // Fall back to guide.url if it's a valid http(s) URL
