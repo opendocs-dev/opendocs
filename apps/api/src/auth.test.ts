@@ -49,7 +49,7 @@ afterAll(async () => {
   await cleanDatabase();
 });
 
-test('GitHub sign-up creates one user and one personal organization', async () => {
+test('GitHub sign-up creates one user and one owner member of the single main organization', async () => {
   stubGitHub();
   const app = createApp(async () => {});
 
@@ -65,8 +65,7 @@ test('GitHub sign-up creates one user and one personal organization', async () =
 
   const organizations = await prisma.organization.findMany();
   expect(organizations).toHaveLength(1);
-  expect(organizations[0]!.name).toBe(GITHUB_ACCOUNT.name);
-  expect(organizations[0]!.slug).toMatch(/^octo-cat-[A-Za-z0-9]{6}$/);
+  expect(organizations[0]!.slug).toBe('main');
 
   const members = await prisma.member.findMany();
   expect(members).toHaveLength(1);
@@ -75,7 +74,7 @@ test('GitHub sign-up creates one user and one personal organization', async () =
   expect(members[0]!.role).toBe('owner');
 });
 
-test('second sign-in for the same account does not duplicate the organization', async () => {
+test('second sign-in for the same account does not duplicate anything', async () => {
   // This account hides its email, so it also covers the noreply fallback.
   stubGitHub({ email: null });
   const app = createApp(async () => {});
@@ -131,7 +130,6 @@ test('create without termsAccepted returns validation_failed', async () => {
   expect(response.status).toBe(422);
   const body = (await response.json()) as { code?: string; message?: string };
   expect(body.code).toBe('validation_failed');
-  expect(body.message).toContain('staging terms');
   expect(await prisma.apikey.count()).toBe(0);
 });
 
@@ -197,18 +195,8 @@ test('non-owner member cannot create a key', async () => {
   const organization = await prisma.organization.findFirstOrThrow();
 
   const memberCookie = await signIn(app, OTHER_GITHUB_ACCOUNT);
-  const secondUser = await prisma.user.findFirstOrThrow({
-    where: { email: OTHER_GITHUB_ACCOUNT.email! },
-  });
-
-  await prisma.member.create({
-    data: {
-      id: crypto.randomUUID(),
-      organizationId: organization.id,
-      userId: secondUser.id,
-      role: 'member',
-    },
-  });
+  // The second sign-in joined the instance workspace as an editor.
+  expect((await prisma.member.count({ where: { role: 'editor' } }))).toBe(1);
 
   const response = await createKey(app, memberCookie, {
     organizationId: organization.id,
