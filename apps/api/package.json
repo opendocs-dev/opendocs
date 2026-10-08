@@ -1,5 +1,5 @@
 {
-  "name": "@opendocs-cloud/api",
+  "name": "@opendocs/api",
   "private": true,
   "type": "module",
   "scripts": {
