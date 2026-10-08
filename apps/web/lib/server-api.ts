@@ -1,6 +1,8 @@
 import { headers } from 'next/headers';
+import { apiOrigin } from './api-proxy';
 
-const DEFAULT_API_ORIGIN = 'http://localhost:4000';
+export { apiOrigin };
+
 
 export type Session = {
   session: { activeOrganizationId?: string | null; [key: string]: unknown };
@@ -63,10 +65,6 @@ export type FlowsResponse = {
   items: FlowItem[];
   next_cursor: string | null;
 };
-
-export function apiOrigin(): string {
-  return (process.env.API_ORIGIN ?? DEFAULT_API_ORIGIN).replace(/\/+$/, '');
-}
 
 /**
  * Server components reach the API directly, so the browser's session cookie
