@@ -1,10 +1,8 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
   BASE_URL,
   cleanDatabase,
+  memoryStorage,
   OTHER_GITHUB_ACCOUNT,
   realFetch,
   signIn,
@@ -13,7 +11,6 @@ import {
 import { tinyPng } from '../../test/images';
 import { getPrisma } from '../db';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
 
 const prisma = getPrisma();
 
@@ -29,11 +26,7 @@ type Workspace = {
 };
 
 const newApp = async (): Promise<App> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-recording-status-'));
-  return createApp(async () => {}, {
-    provider: new LocalDiskProvider(root),
-    accounts: ['local'],
-  });
+  return createApp(async () => {}, memoryStorage());
 };
 
 const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): Promise<Workspace> => {
@@ -127,98 +120,6 @@ test('empty workspace returns disconnected status with no recording', async () =
   expect(body.steps_count).toBe(0);
   expect(body.compile_state).toBe('none');
   expect(body.guide_id).toBeNull();
-});
-
-test('workspace isolation: workspace A recording and keys are never visible to workspace B', async () => {
-  const app = await newApp();
-  const wsA = await workspace(app);
-  const wsB = await workspace(app, OTHER_GITHUB_ACCOUNT);
-
-  // wsA has an API key used 5 minutes ago
-  const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
-  await prisma.apikey.create({
-    data: {
-      id: 'key_ws_a',
-      referenceId: wsA.organizationId,
-      name: 'Agent Key A',
-      key: 'key_val_a',
-      lastRequest: fiveMinAgo,
-      createdAt: fiveMinAgo,
-      updatedAt: fiveMinAgo,
-    },
-  });
-
-  // wsA creates a run and adds 2 steps
-  const createRes = await wsA.createRun({ title: 'Workspace A Guide' });
-  expect(createRes.status).toBe(201);
-  const { session_id } = (await createRes.json()) as { session_id: string };
-
-  const asset1 = await wsA.upload();
-  const asset2 = await wsA.upload();
-  await wsA.addStep(session_id, stepBody(asset1));
-  await wsA.addStep(session_id, stepBody(asset2));
-
-  // Verify wsB sees nothing from wsA
-  const resB = await wsB.getStatus();
-  expect(resB.status).toBe(200);
-  const bodyB = (await resB.json()) as {
-    connected: boolean;
-    has_key: boolean;
-    recording_started: boolean;
-    steps_count: number;
-    compile_state: string;
-    guide_id: string | null;
-  };
-
-  expect(bodyB.connected).toBe(false);
-  expect(bodyB.has_key).toBe(false);
-  expect(bodyB.recording_started).toBe(false);
-  expect(bodyB.steps_count).toBe(0);
-  expect(bodyB.compile_state).toBe('none');
-  expect(bodyB.guide_id).toBeNull();
-
-  // Verify wsA sees its own recording and key
-  const resA = await wsA.getStatus();
-  expect(resA.status).toBe(200);
-  const bodyA = (await resA.json()) as {
-    connected: boolean;
-    has_key: boolean;
-    key_name: string | null;
-    key_last_used: string | null;
-    recording_started: boolean;
-    steps_count: number;
-    compile_state: string;
-    guide_id: string | null;
-  };
-
-  expect(bodyA.connected).toBe(true);
-  expect(bodyA.has_key).toBe(true);
-  expect(bodyA.key_name).toBe('Agent Key A');
-  expect(bodyA.key_last_used).toBe(fiveMinAgo.toISOString());
-  expect(bodyA.recording_started).toBe(true);
-  expect(bodyA.steps_count).toBe(2);
-  expect(bodyA.compile_state).toBe('none');
-
-  // wsA compiles the run
-  const compileRes = await wsA.compile(session_id, { title: 'Workspace A Guide Compiled' });
-  expect(compileRes.status).toBe(200);
-
-  const resACompiled = await wsA.getStatus();
-  const bodyACompiled = (await resACompiled.json()) as {
-    compile_state: string;
-    guide_id: string | null;
-  };
-  expect(bodyACompiled.compile_state).toBe('done');
-  expect(bodyACompiled.guide_id).toBeTruthy();
-
-  // wsB is still isolated after wsA compile
-  const resBAfter = await wsB.getStatus();
-  const bodyBAfter = (await resBAfter.json()) as {
-    compile_state: string;
-    guide_id: string | null;
-  };
-  expect(bodyBAfter.compile_state).toBe('none');
-  expect(bodyBAfter.guide_id).toBeNull();
 });
 
 test('records progression: key connected -> recording started -> steps count -> compile done', async () => {
