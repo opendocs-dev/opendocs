@@ -83,12 +83,6 @@ export const MeWorkspaceSchema = Type.Object({
   slug: Type.Optional(Type.String()),
 });
 
-export const MePlanSchema = Type.Union([
-  Type.Literal('free'),
-  Type.Literal('pro'),
-  Type.Literal('enterprise'),
-]);
-
 export const MeQuotaSchema = Type.Object({
   files_left: Type.Number(),
   bytes_left: Type.Number(),
@@ -96,8 +90,7 @@ export const MeQuotaSchema = Type.Object({
 
 export const MeResponseSchema = Type.Object({
   workspace: MeWorkspaceSchema,
-  plan: MePlanSchema,
-  quota: MeQuotaSchema,
+  quota: Type.Optional(MeQuotaSchema),
   min_cli_version: Type.String(),
   role: Type.Optional(Type.Union([Type.Literal('owner'), Type.Literal('admin'), Type.Literal('editor')])),
   site_host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -344,8 +337,6 @@ export type DocStep = Static<typeof DocStepSchema>;
 export const GetDocResponseSchema = Type.Object({
   public_id: Type.String(),
   title: Type.String(),
-  plan: Type.Optional(Type.String()),
-  is_free_plan: Type.Optional(Type.Boolean()),
   preset: Type.Optional(Type.String()),
   custom_branding: Type.Optional(Type.Any()),
   steps: Type.Array(DocStepSchema),
