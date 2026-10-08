@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-export function SignInButton() {
+export function SignInButton({ next = '/admin' }: { next?: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -17,7 +17,7 @@ export function SignInButton() {
         credentials: 'include',
         body: JSON.stringify({
           provider: 'github',
-          callbackURL: '/dashboard',
+          callbackURL: next,
           errorCallbackURL: '/sign-in?error=cancelled',
         }),
       });
