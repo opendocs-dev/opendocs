@@ -24,7 +24,7 @@ test('publicLink published with slug and siteHost', () => {
     visibility: 'published',
     url: 'http://example.com/doc',
   };
-  expect(publicLink(guide, 'example.com')).toBe('https://example.com/g/my-guide');
+  expect(publicLink(guide)).toBe('/g/my-guide');
 });
 
 test('publicLink unlisted with slug and siteHost', () => {
@@ -33,7 +33,7 @@ test('publicLink unlisted with slug and siteHost', () => {
     slug: 'my-guide',
     visibility: 'unlisted',
   };
-  expect(publicLink(guide, 'example.com')).toBe('https://example.com/g/my-guide');
+  expect(publicLink(guide)).toBe('/g/my-guide');
 });
 
 test('publicLink draft falls back to url', () => {
@@ -43,7 +43,7 @@ test('publicLink draft falls back to url', () => {
     visibility: 'draft',
     url: 'https://example.com/doc/id1',
   };
-  expect(publicLink(guide, 'example.com')).toBe('https://example.com/doc/id1');
+  expect(publicLink(guide)).toBe('https://example.com/doc/id1');
 });
 
 test('publicLink no slug returns url', () => {
@@ -52,17 +52,7 @@ test('publicLink no slug returns url', () => {
     visibility: 'published',
     url: 'https://example.com/doc/id1',
   };
-  expect(publicLink(guide, 'example.com')).toBe('https://example.com/doc/id1');
-});
-
-test('publicLink no siteHost returns url', () => {
-  const guide = {
-    public_id: 'id1',
-    slug: 'my-guide',
-    visibility: 'published',
-    url: 'https://example.com/doc/id1',
-  };
-  expect(publicLink(guide, null)).toBe('https://example.com/doc/id1');
+  expect(publicLink(guide)).toBe('https://example.com/doc/id1');
 });
 
 test('publicLink no url returns null', () => {
@@ -71,7 +61,7 @@ test('publicLink no url returns null', () => {
     slug: 'my-guide',
     visibility: 'draft',
   };
-  expect(publicLink(guide, 'example.com')).toBeNull();
+  expect(publicLink(guide)).toBeNull();
 });
 
 test('publicLink rejects non-http url', () => {
@@ -79,7 +69,7 @@ test('publicLink rejects non-http url', () => {
     public_id: 'id1',
     url: 'javascript:alert("xss")',
   };
-  expect(publicLink(guide, null)).toBeNull();
+  expect(publicLink(guide)).toBeNull();
 });
 
 test('categoryOption active status', () => {
