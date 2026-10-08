@@ -1,6 +1,7 @@
 import { auth } from '../auth';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
+import { getInstanceOrg } from '../instance-org';
 
 const unauthorized = () => new ApiError(401, 'unauthorized', 'A valid session is required');
 
@@ -41,11 +42,11 @@ export const touchMemberLastActive = async (userId: string, organizationId: stri
 
 /**
  * API keys are deliberately not accepted on the site routes (unlike the rest of the API):
- * the site address is a workspace-owner concern managed from the dashboard, not the CLI.
+ * site settings are a workspace-owner concern managed from the dashboard, not the CLI.
  */
 export const requireSession = async (request: Request) => {
   const session = await auth.api.getSession({ headers: request.headers });
-  const organizationId = session?.session.activeOrganizationId;
+  const organizationId = session ? (await getInstanceOrg()).id : undefined;
   if (!session || !organizationId) throw unauthorized();
   void touchMemberLastActive(session.user.id, organizationId);
   return { userId: session.user.id, organizationId };
