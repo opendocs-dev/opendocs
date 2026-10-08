@@ -1,5 +1,4 @@
 import { CLI_MIN_VERSION, MeResponseSchema } from '@opendocs/core';
-import { DAILY_QUOTAS } from '../legacy-limits';
 import { Value } from '@sinclair/typebox/value';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
@@ -11,11 +10,12 @@ import {
   type App,
 } from '../../test/helpers';
 import { getPrisma } from '../db';
+import { resetEnvForTest } from '../env';
 import { createApp } from '../index';
 
 const prisma = getPrisma();
 
-/** Signs in, then mints a key for the personal organization. */
+/** Signs in, then mints a key for the instance workspace. */
 const mintKey = async (app: App) => {
   const cookie = await signIn(app);
   const organization = await prisma.organization.findFirstOrThrow();
@@ -48,7 +48,7 @@ afterAll(async () => {
   await cleanDatabase();
 });
 
-test('valid key returns workspace, quota, min CLI version', async () => {
+test('valid key returns workspace and min CLI version, with no quota or site_host', async () => {
   const app = createApp(async () => {});
   const { key, organization } = await mintKey(app);
 
@@ -59,9 +59,7 @@ test('valid key returns workspace, quota, min CLI version', async () => {
   expect(Value.Check(MeResponseSchema, body)).toBe(true);
   expect(body).toEqual({
     workspace: { id: organization.id, name: organization.name, slug: organization.slug },
-    quota: { files_left: DAILY_QUOTAS.free.files, bytes_left: DAILY_QUOTAS.free.bytes },
     min_cli_version: CLI_MIN_VERSION,
-    site_host: null,
   });
 });
 
@@ -109,56 +107,6 @@ test('session cookie returns the active workspace', async () => {
   expect(body.workspace).toEqual({ id: organization.id, name: organization.name, slug: organization.slug });
 });
 
-test('no usage row yet returns full quota', async () => {
-  const app = createApp(async () => {});
-  const { key } = await mintKey(app);
-
-  const response = await getMe(app, { 'x-api-key': key });
-
-  expect(response.status).toBe(200);
-  const body = (await response.json()) as { quota: { files_left: number; bytes_left: number } };
-  // Nothing has been uploaded, so the Free allowance is reported untouched.
-  expect(body.quota).toEqual({
-    files_left: DAILY_QUOTAS.free.files,
-    bytes_left: DAILY_QUOTAS.free.bytes,
-  });
-});
-
-test("quota left reflects today's usage", async () => {
-  const app = createApp(async () => {});
-  const { key, organization } = await mintKey(app);
-
-  const today = new Date();
-  const day = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  await prisma.usageDaily.create({
-    data: { organizationId: organization.id, day, files: 5, bytes: BigInt(1024) },
-  });
-
-  const response = await getMe(app, { 'x-api-key': key });
-
-  expect(response.status).toBe(200);
-  const body = (await response.json()) as { quota: { files_left: number; bytes_left: number } };
-  expect(body.quota).toEqual({
-    files_left: DAILY_QUOTAS.free.files - 5,
-    bytes_left: DAILY_QUOTAS.free.bytes - 1024,
-  });
-});
-
-test('an unknown stored plan still returns a plan-less me response', async () => {
-  const app = createApp(async () => {});
-  const { key, organization } = await mintKey(app);
-  await prisma.workspaceBilling.create({
-    data: { organizationId: organization.id, plan: 'enterprise-legacy' },
-  });
-
-  const response = await getMe(app, { 'x-api-key': key });
-
-  expect(response.status).toBe(200);
-  const body = (await response.json()) as { plan?: string; quota: { files_left: number } };
-  expect(body.plan).toBeUndefined();
-  expect(body.quota.files_left).toBe(DAILY_QUOTAS.free.files);
-});
-
 test('session caller gets role', async () => {
   const app = createApp(async () => {});
   const cookie = await signIn(app);
@@ -203,33 +151,63 @@ test('API key caller does not get role', async () => {
   expect(body.role).toBeUndefined();
 });
 
-test('site_host is null when TENANT_BASE_DOMAIN is unset', async () => {
-  const app = createApp(async () => {});
-  const cookie = await signIn(app);
-
-  const response = await getMe(app, { cookie });
-
-  expect(response.status).toBe(200);
-  const body = (await response.json()) as { site_host: string | null };
-  expect(body.site_host).toBeNull();
-});
-
-test('site_host is slug.base when TENANT_BASE_DOMAIN is set', async () => {
-  const app = createApp(async () => {});
-  const cookie = await signIn(app);
-  const organization = await prisma.organization.findFirstOrThrow();
-
-  const oldBase = process.env.TENANT_BASE_DOMAIN;
-  process.env.TENANT_BASE_DOMAIN = 'example.com';
-
+/** Runs `fn` with STORAGE_QUOTA_BYTES set (or unset when null), restoring the env afterwards. */
+const withQuota = async (value: string | null, fn: () => Promise<void>) => {
+  const old = process.env.STORAGE_QUOTA_BYTES;
+  if (value === null) delete process.env.STORAGE_QUOTA_BYTES;
+  else process.env.STORAGE_QUOTA_BYTES = value;
+  resetEnvForTest();
   try {
-    const response = await getMe(app, { cookie });
+    await fn();
+  } finally {
+    if (old === undefined) delete process.env.STORAGE_QUOTA_BYTES;
+    else process.env.STORAGE_QUOTA_BYTES = old;
+    resetEnvForTest();
+  }
+};
+
+test('me.quota hidden when no cap', async () => {
+  const app = createApp(async () => {});
+  const { key } = await mintKey(app);
+
+  await withQuota(null, async () => {
+    const response = await getMe(app, { 'x-api-key': key });
 
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { site_host: string | null };
-    expect(body.site_host).toBe(`${organization.slug}.example.com`);
-  } finally {
-    if (oldBase === undefined) delete process.env.TENANT_BASE_DOMAIN;
-    else process.env.TENANT_BASE_DOMAIN = oldBase;
-  }
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(Value.Check(MeResponseSchema, body)).toBe(true);
+    expect(body.quota).toBeUndefined();
+    expect(body.site_host).toBeUndefined();
+  });
+});
+
+test('me.quota present and filled from env when STORAGE_QUOTA_BYTES>0', async () => {
+  const app = createApp(async () => {});
+  const { key, organization } = await mintKey(app);
+
+  await withQuota('1000000', async () => {
+    const empty = await getMe(app, { 'x-api-key': key });
+    expect(empty.status).toBe(200);
+    const emptyBody = (await empty.json()) as { quota: { files_left: number; bytes_left: number } };
+    expect(emptyBody.quota).toEqual({ files_left: Number.MAX_SAFE_INTEGER, bytes_left: 1000000 });
+
+    await prisma.asset.create({
+      data: {
+        publicId: 'quota-asset',
+        organizationId: organization.id,
+        kind: 'step',
+        providerFileId: 'file-1',
+        mime: 'image/png',
+        bytes: 400,
+        width: 1,
+        height: 1,
+        sha256: 'a'.repeat(64),
+      },
+    });
+
+    const used = await getMe(app, { 'x-api-key': key });
+    const usedBody = (await used.json()) as { quota: { files_left: number; bytes_left: number } };
+    expect(Value.Check(MeResponseSchema, usedBody)).toBe(true);
+    expect(usedBody.quota).toEqual({ files_left: Number.MAX_SAFE_INTEGER, bytes_left: 999600 });
+  });
 });
