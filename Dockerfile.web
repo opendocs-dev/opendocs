@@ -1,0 +1,92 @@
+# ==============================================================================
+# OpenDocs Web Container (Dockerfile.web)
+#
+# Build command:
+#   docker build -f Dockerfile.web -t opendocs-web:<tag> \
+#     --build-arg API_ORIGIN=http://api:4000 \
+#     --build-arg BETTER_AUTH_URL=http://localhost:3000 \
+#     .
+#
+# Build arguments:
+#   BUN_VERSION              Bun version to use (default: 1.4.2)
+#   API_ORIGIN               API origin for Next.js rewrites at build time (e.g. http://api:4000)
+#   BETTER_AUTH_URL          Better-Auth / app URL at build time (e.g. http://localhost:3000)
+#
+# Required runtime environment variables:
+#   API_ORIGIN               Target origin for API proxy / rewrites (default: http://localhost:4000)
+#
+# Optional runtime environment variables:
+#   PORT                     Port for Next.js server (default: 3000)
+#   BETTER_AUTH_URL          Canonical public base URL (e.g. http://localhost:3000)
+#   PUBLIC_APP_ORIGIN        Public domain/origin override for published guide links
+#   TENANT_BASE_DOMAIN       Base domain for tenant subdomain routing ({slug}.TENANT_BASE_DOMAIN)
+#   BILLING_READY            Set to "true" to display billing navigation and pages
+#   NEXT_TELEMETRY_DISABLED  Disable Next.js telemetry (default: 1)
+# ==============================================================================
+
+ARG BUN_VERSION=1.4.2
+
+# ------------------------------------------------------------------------------
+# Stage 1: Build Next.js application
+# ------------------------------------------------------------------------------
+FROM oven/bun:${BUN_VERSION} AS builder
+
+WORKDIR /app
+
+# Copy the monorepo (packages/core is linked into apps through bun workspaces)
+COPY . /app
+
+# Install dependencies using frozen lockfile
+RUN bun install --frozen-lockfile
+
+# Build arguments exported as environment variables for next build
+ARG API_ORIGIN
+ARG BETTER_AUTH_URL
+ENV API_ORIGIN=${API_ORIGIN}
+ENV BETTER_AUTH_URL=${BETTER_AUTH_URL}
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+
+# Build Next.js web application
+WORKDIR /app/apps/web
+RUN bun run build
+
+# Remove compiler cache to reduce image size before copying to runner
+RUN rm -rf .next/cache
+
+# ------------------------------------------------------------------------------
+# Stage 2: Runner image
+# ------------------------------------------------------------------------------
+FROM oven/bun:${BUN_VERSION} AS runner
+
+WORKDIR /app
+
+# The build arg also becomes the runtime default (server-side fetches read API_ORIGIN at runtime); a runtime env var overrides it.
+ARG API_ORIGIN
+ARG BETTER_AUTH_URL
+ENV API_ORIGIN=${API_ORIGIN}
+ENV BETTER_AUTH_URL=${BETTER_AUTH_URL}
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PATH="/app/apps/web/node_modules/.bin:$PATH"
+
+# Copy core package (node_modules/@opendocs/core is a workspace link to it)
+COPY --from=builder --chown=bun:bun /app/packages/core /app/packages/core
+
+# Copy monorepo root package files and node_modules
+COPY --from=builder --chown=bun:bun /app/package.json /app/bun.lock /app/
+COPY --from=builder --chown=bun:bun /app/node_modules /app/node_modules
+
+# Copy apps/web (including built .next directory, excluding apps/api)
+COPY --from=builder --chown=bun:bun /app/apps/web /app/apps/web
+
+USER bun
+EXPOSE 3000
+
+WORKDIR /app/apps/web
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD bun -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+CMD ["sh", "-c", "next start -p ${PORT:-3000}"]
