@@ -1,4 +1,4 @@
-import { DAILY_QUOTAS } from '@opendocs/core';
+import { DAILY_QUOTAS } from '../legacy-limits';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import { BASE_URL, cleanDatabase, fakeApiKey, realFetch, signIn, type App } from '../../test/helpers';
 import { getPrisma } from '../db';
