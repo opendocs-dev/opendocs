@@ -26,11 +26,9 @@ const organizationRoles = {
  * read endpoints are reachable. Create, switch, invite and member management are refused.
  */
 const READABLE_ORGANIZATION_PATHS = new Set([
-  '/organization/get-full-organization',
   '/organization/list',
   '/organization/get-active-member',
   '/organization/get-active-member-role',
-  '/organization/list-members',
   '/organization/has-permission',
 ]);
 
