@@ -63,8 +63,10 @@ describe('.env.example', () => {
     expect(result.ok).toBe(true);
   });
 
-  test('the root copy matches the api copy', () => {
-    expect(readFileSync(rootExample, 'utf8')).toBe(readFileSync(apiExample, 'utf8'));
+  test('the root copy documents every api key, plus the compose-only ones', () => {
+    const composeOnly = ['WEB_PORT', 'POSTGRES_PASSWORD', 'COMPOSE_PROFILES'];
+    const root = Object.keys(parseExample(rootExample)).sort();
+    expect(root).toEqual([...Object.keys(parseExample(apiExample)), ...composeOnly].sort());
   });
 
   test('holds no real secrets or domains', () => {

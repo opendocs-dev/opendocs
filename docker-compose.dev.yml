@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: opendocs
+      POSTGRES_PASSWORD: opendocs
+      POSTGRES_DB: opendocs
+    ports:
+      # localhost only: dev credentials must never face the network
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
