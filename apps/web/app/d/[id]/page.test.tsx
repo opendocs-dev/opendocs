@@ -39,7 +39,6 @@ const DOC = {
     { order: 1, action: 'click', instruction: 'Choose espresso', page_url: 'https://cafe.test/menu', image: { url: null, expired: false } },
     { order: 2, action: 'click', instruction: 'Confirm checkout', page_url: 'https://cafe.test/cart', image: { url: null, expired: false } },
   ],
-  is_free_plan: true,
 };
 
 describe('DocPage (AC-04)', () => {
@@ -60,7 +59,7 @@ describe('DocPage (AC-04)', () => {
     expect(html).toContain('Order a coffee');
   });
 
-  test('free plan footer shown', async () => {
+  test('no "Made with" footer is rendered', async () => {
     responses = {
       '/api/v1/docs/doc-123': DOC,
     };
@@ -69,22 +68,6 @@ describe('DocPage (AC-04)', () => {
     const DocPage = (await import('./page')).default;
     const element = await DocPage({
       params: Promise.resolve({ id: 'doc-123' }),
-    });
-    const html = renderToStaticMarkup(element);
-
-    expect(html).toContain('Made with');
-    expect(html).toContain('OpenDocs');
-  });
-
-  test('free plan footer hidden when not on free plan', async () => {
-    responses = {
-      '/api/v1/docs/doc-paid': { ...DOC, is_free_plan: false },
-    };
-    stubFetch();
-
-    const DocPage = (await import('./page')).default;
-    const element = await DocPage({
-      params: Promise.resolve({ id: 'doc-paid' }),
     });
     const html = renderToStaticMarkup(element);
 
