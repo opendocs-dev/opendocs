@@ -3,7 +3,7 @@ import { resolveOrganizationId } from '../auth-context';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
 import { capabilitiesFor, getPlan } from '../plan';
-import type { Plan } from '@opendocs/core';
+import type { Plan } from '../legacy-limits';
 import {
   encryptDriveSecret,
   encryptS3Secret,
