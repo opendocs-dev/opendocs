@@ -12,18 +12,21 @@ const isValidRole = (role: string): role is Role =>
 
 /**
  * Validates the E2E bypass configuration at boot time if enabled.
- * Throws an Error if enabled in production or without a token of at least 24 chars.
+ * Throws an Error if enabled outside NODE_ENV test/development or without a token of at least 24 chars.
  * Never logs or echoes the token.
  */
+/** The bypass only exists when NODE_ENV is explicitly `test` or `development`. */
+const isE2EEnvironment = (): boolean => process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development';
+
 export const bootCheck = (): void => {
   if (process.env.E2E_LOGIN_ENABLED === 'true') {
     if (
-      process.env.NODE_ENV === 'production' ||
+      !isE2EEnvironment() ||
       !process.env.E2E_LOGIN_TOKEN ||
       process.env.E2E_LOGIN_TOKEN.length < 24
     ) {
       throw new Error(
-        'E2E login bypass is enabled but misconfigured (refusing to boot in production or with token shorter than 24 chars)',
+        'E2E login bypass is enabled but misconfigured (refusing to boot unless NODE_ENV is test or development, or with token shorter than 24 chars)',
       );
     }
   }
@@ -90,12 +93,12 @@ const serializeCookie = (name: string, value: string, options?: CookieOptions): 
 export const e2eLoginRoute = (app?: Elysia) => {
   const instance = app ?? new Elysia();
 
-  if (process.env.E2E_LOGIN_ENABLED !== 'true') {
+  if (process.env.E2E_LOGIN_ENABLED !== 'true' || !isE2EEnvironment()) {
     return instance;
   }
 
-  return instance.get('/api/test/login', async ({ query }) => {
-    verifyTokenOrThrow(query.token, process.env.E2E_LOGIN_TOKEN);
+  return instance.get('/api/test/login', async ({ query, request }) => {
+    verifyTokenOrThrow(request.headers.get('x-e2e-token'), process.env.E2E_LOGIN_TOKEN);
 
     const roleParam = query.role ?? 'owner';
     if (typeof roleParam !== 'string' || !isValidRole(roleParam)) {
@@ -133,7 +136,7 @@ export const e2eLoginRoute = (app?: Elysia) => {
     }
 
     // 2. Ensure the user is a member of the instance workspace
-    await joinInstanceOrg(user);
+    await joinInstanceOrg(user, { allowAnyFirstOwner: true });
 
     const member = await prisma.member.findFirstOrThrow({
       where: { userId: user.id },

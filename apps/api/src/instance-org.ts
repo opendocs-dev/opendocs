@@ -40,11 +40,15 @@ export const isAdminEmail = (email: string): boolean => getEnv().adminEmails.inc
 const roleByEmail = (email: string): Role => (isAdminEmail(email) ? 'admin' : 'editor');
 
 /**
- * Makes `user` a member of the instance workspace. The first member ever is the owner
- * regardless of `ADMIN_EMAILS`; the check and the insert share an advisory lock so two
+ * Makes `user` a member of the instance workspace. The first member ever is the owner and
+ * must be listed in `ADMIN_EMAILS` (a stranger is refused, unless `allowAnyFirstOwner`, which
+ * only the test-only E2E login uses); the check and the insert share an advisory lock so two
  * simultaneous first sign-ins cannot both become owner.
  */
-export const joinInstanceOrg = async (user: { id: string; email: string }): Promise<Role> => {
+export const joinInstanceOrg = async (
+  user: { id: string; email: string },
+  options: { allowAnyFirstOwner?: boolean } = {},
+): Promise<Role> => {
   const org = await getInstanceOrg();
   const prisma = getPrisma();
 
@@ -57,6 +61,9 @@ export const joinInstanceOrg = async (user: { id: string; email: string }): Prom
     if (existing) return existing.role as Role;
 
     const members = await tx.member.count({ where: { organizationId: org.id } });
+    if (members === 0 && !options.allowAnyFirstOwner && !isAdminEmail(user.email)) {
+      throw new Error('The first owner must be listed in ADMIN_EMAILS');
+    }
     const role: Role = members === 0 ? 'owner' : roleByEmail(user.email);
     await tx.member.create({
       data: { id: crypto.randomUUID(), organizationId: org.id, userId: user.id, role, createdAt: new Date() },

@@ -11,6 +11,7 @@ import {
   stubGitHub,
   type App,
 } from '../test/helpers';
+import { restoreEnv, setEnv } from '../test/env';
 import { auth } from './auth';
 import { getPrisma } from './db';
 import { createApp } from './index';
@@ -43,6 +44,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+  restoreEnv();
 });
 
 afterAll(async () => {
@@ -77,6 +79,7 @@ test('GitHub sign-up creates one user and one owner member of the single main or
 test('second sign-in for the same account does not duplicate anything', async () => {
   // This account hides its email, so it also covers the noreply fallback.
   stubGitHub({ email: null });
+  setEnv({ ADMIN_EMAILS: `${GITHUB_ACCOUNT.id}+${GITHUB_ACCOUNT.login}@users.noreply.github.com` });
   const app = createApp(async () => {});
 
   const first = await startSignIn(app);
@@ -205,4 +208,18 @@ test('non-owner member cannot create a key', async () => {
 
   expect(response.status).toBe(403);
   expect(await prisma.apikey.count()).toBe(0);
+});
+
+test('member and full-organization reads are not exposed, has-permission still is', async () => {
+  const app = createApp(async () => {});
+  const cookie = await signIn(app);
+
+  for (const path of ['list-members', 'get-full-organization']) {
+    const response = await app.handle(new Request(`${BASE_URL}/api/auth/organization/${path}`, { headers: { cookie } }));
+    expect(response.status).toBe(404);
+  }
+  const active = await app.handle(
+    new Request(`${BASE_URL}/api/auth/organization/get-active-member`, { headers: { cookie } }),
+  );
+  expect(active.status).not.toBe(404);
 });
