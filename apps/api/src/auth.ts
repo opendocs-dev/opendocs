@@ -6,12 +6,9 @@ import { organization } from 'better-auth/plugins';
 import { createAccessControl } from 'better-auth/plugins/access';
 import { adminAc, defaultStatements, memberAc, ownerAc } from 'better-auth/plugins/organization/access';
 import { getPrisma } from './db';
-
-const requireEnv = (key: string): string => {
-  const value = process.env[key];
-  if (!value) throw new Error(`${key} is not set`);
-  return value;
-};
+import { getEnv } from './env';
+import { getInstanceOrg, joinInstanceOrg, syncMemberRole } from './instance-org';
+import { isSignupOpen, SIGNUP_CLOSED_MESSAGE } from './signup-policy';
 
 // C18 roles: owner, admin and editor. Better-Auth's api-key plugin checks `apiKey` permissions
 // on the organization role itself, so owners and admins get them and editors do not.
@@ -23,169 +20,67 @@ const organizationRoles = {
   editor: accessControl.newRole({ ...memberAc.statements }),
 };
 
-// Lowercase only: the slug CHECK constraint (organization_slug_format) rejects uppercase.
-export const SLUG_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
-
-export const MAX_OWNED_WORKSPACES = 5;
-
-/** 6 random lowercase-alphanumeric chars, so a slug stays unique even for duplicate display names. */
-export const slugSuffix = (): string => {
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
-  return Array.from(bytes, (byte) => SLUG_ALPHABET[byte % SLUG_ALPHABET.length]).join('');
-};
-
-// The slugSuffix adds "-" + 6 chars, and organization_slug_format caps the whole slug at
-// 30, so the display-name part alone must leave room for that: 30 - 7 = 23.
-export const SLUGIFY_MAX_LENGTH = 23;
-
-export const slugify = (value: string): string => {
-  const slug = value
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, SLUGIFY_MAX_LENGTH)
-    .replace(/-+$/, '');
-  return slug || 'workspace';
-};
-
-/** Generates a unique, non-reserved workspace slug. */
-export const generateUniqueWorkspaceSlug = async (displayName: string): Promise<string> => {
-  const prisma = getPrisma();
-  const base = slugify(displayName);
-  for (let i = 0; i < 20; i++) {
-    const slug = `${base}-${slugSuffix()}`;
-    const reserved = await prisma.reservedName.findUnique({ where: { name: slug } });
-    if (reserved) continue;
-    const existingOrg = await prisma.organization.findUnique({ where: { slug } });
-    if (existingOrg) continue;
-    const existingHistory = await prisma.siteAddressHistory.findUnique({ where: { slug } });
-    if (existingHistory) continue;
-    return slug;
-  }
-  throw new APIError('INTERNAL_SERVER_ERROR', {
-    code: 'slug_generation_failed',
-    message: 'Could not generate a unique workspace address',
-  });
-};
-
-/** Creates the personal organization for a brand new user, with that user as owner. */
-export const createPersonalOrganization = async (user: { id: string; name?: string | null; email: string }) => {
-  const prisma = getPrisma();
-
-  const alreadyHasOrg = await prisma.member.findFirst({ where: { userId: user.id } });
-  if (alreadyHasOrg) return;
-
-  const displayName = user.name?.trim() || user.email.split('@')[0] || 'Workspace';
-  const now = new Date();
-
-  // One nested write, so a failure never leaves an org without its owner.
-  await prisma.organization.create({
-    data: {
-      id: crypto.randomUUID(),
-      name: displayName,
-      slug: `${slugify(displayName)}-${slugSuffix()}`,
-      createdAt: now,
-      members: { create: { id: crypto.randomUUID(), userId: user.id, role: 'owner', createdAt: now } },
-    },
-  });
-};
+/**
+ * Better-Auth's organization endpoints stay mounted (the api-key plugin reads the
+ * organization roles), but the instance has exactly one workspace and no invites: only
+ * read endpoints are reachable. Create, switch, invite and member management are refused.
+ */
+const READABLE_ORGANIZATION_PATHS = new Set([
+  '/organization/get-full-organization',
+  '/organization/list',
+  '/organization/get-active-member',
+  '/organization/get-active-member-role',
+  '/organization/list-members',
+  '/organization/has-permission',
+]);
 
 // Map of GitHub accountId (numeric string) -> login handle captured during OAuth profile mapping.
 const pendingGitHubLogins = new Map<string, string>();
 
+const env = getEnv();
+
 export const auth = betterAuth({
   basePath: '/api/auth',
-  baseURL: process.env.BETTER_AUTH_URL,
-  secret: process.env.BETTER_AUTH_SECRET,
+  baseURL: env.publicUrl,
+  secret: env.authSecret,
   database: prismaAdapter(getPrisma(), { provider: 'postgresql' }),
+  // The organization plugin expects an Invitation table; this instance has no invites
+  // (C23 AC-07) and the invite endpoints are refused above, so the table is not created.
+  advanced: { database: { validateSchema: false } },
   emailAndPassword: { enabled: false },
-  socialProviders: {
-    github: {
-      clientId: requireEnv('GITHUB_CLIENT_ID'),
-      clientSecret: requireEnv('GITHUB_CLIENT_SECRET'),
-      // GitHub may hide the email; fall back to the stable noreply address.
-      mapProfileToUser: (profile) => {
-        if (profile.id != null && profile.login) {
-          pendingGitHubLogins.set(String(profile.id), profile.login);
-        }
-        return {
-          name: profile.name ?? profile.login,
-          email: profile.email ?? `${profile.id}+${profile.login}@users.noreply.github.com`,
-        };
-      },
-    },
-  },
+  // Without GitHub credentials there is no OAuth sign-in (the boot log warns about it).
+  socialProviders: env.github
+    ? {
+        github: {
+          clientId: env.github.clientId,
+          clientSecret: env.github.clientSecret,
+          // GitHub may hide the email; fall back to the stable noreply address.
+          mapProfileToUser: (profile) => {
+            if (profile.id != null && profile.login) {
+              pendingGitHubLogins.set(String(profile.id), profile.login);
+            }
+            return {
+              name: profile.name ?? profile.login,
+              email: profile.email ?? `${profile.id}+${profile.login}@users.noreply.github.com`,
+            };
+          },
+        },
+      }
+    : {},
   plugins: [
-    organization({ ac: accessControl, roles: organizationRoles }),
+    organization({ ac: accessControl, roles: organizationRoles, allowUserToCreateOrganization: false }),
     apiKey({
       // Keys belong to an organization, so `referenceId` is an Organization id.
       references: 'organization',
       apiKeyHeaders: 'x-api-key',
-      // ponytail: the plugin defaults to 10 requests/day per key. Daily quotas are
-      // enforced by the API itself (DAILY_QUOTAS) in a later contract, so keep this off.
+      // The plugin defaults to 10 requests/day per key; the api enforces its own limits.
       rateLimit: { enabled: false },
     }),
   ],
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
-      if (ctx.path === '/organization/create') {
-        const session = await auth.api.getSession({ headers: ctx.headers ?? new Headers() });
-        if (!session) {
-          throw new APIError('UNAUTHORIZED', {
-            code: 'unauthorized',
-            message: 'A valid session is required',
-          });
-        }
-
-        const ownedCount = await getPrisma().member.count({
-          where: { userId: session.user.id, role: 'owner' },
-        });
-        if (ownedCount >= MAX_OWNED_WORKSPACES) {
-          throw new APIError('UNPROCESSABLE_ENTITY', {
-            code: 'workspace_limit',
-            message: `Workspace limit reached. You can own at most ${MAX_OWNED_WORKSPACES} workspaces.`,
-          });
-        }
-
-        const body = (ctx.body ?? {}) as Record<string, unknown>;
-        const name = typeof body.name === 'string' ? body.name.trim() : '';
-        if (!name) {
-          throw new APIError('UNPROCESSABLE_ENTITY', {
-            code: 'validation_failed',
-            message: 'Workspace name is required',
-          });
-        }
-
-        if (!body.slug || typeof body.slug !== 'string' || (body.slug as string).trim() === '') {
-          body.slug = await generateUniqueWorkspaceSlug(name);
-        } else {
-          const rawSlug = (body.slug as string).trim().toLowerCase();
-          const reserved = await getPrisma().reservedName.findUnique({ where: { name: rawSlug } });
-          if (reserved) {
-            throw new APIError('UNPROCESSABLE_ENTITY', {
-              code: 'reserved_slug',
-              message: reserved.reason || 'This address is reserved',
-            });
-          }
-          const existingOrg = await getPrisma().organization.findUnique({ where: { slug: rawSlug } });
-          if (existingOrg) {
-            throw new APIError('UNPROCESSABLE_ENTITY', {
-              code: 'slug_taken',
-              message: 'Address is already taken',
-            });
-          }
-          const existingHistory = await getPrisma().siteAddressHistory.findUnique({ where: { slug: rawSlug } });
-          if (existingHistory) {
-            throw new APIError('UNPROCESSABLE_ENTITY', {
-              code: 'slug_taken',
-              message: 'Address is already taken',
-            });
-          }
-          body.slug = rawSlug;
-        }
-        ctx.body = body;
-        return;
+      if (ctx.path.startsWith('/organization/') && !READABLE_ORGANIZATION_PATHS.has(ctx.path)) {
+        throw new APIError('NOT_FOUND', { code: 'not_found', message: 'Not found' });
       }
 
       if (ctx.path !== '/api-key/create') return;
@@ -193,7 +88,7 @@ export const auth = betterAuth({
       if ((ctx.body as { termsAccepted?: unknown } | undefined)?.termsAccepted !== true) {
         throw new APIError('UNPROCESSABLE_ENTITY', {
           code: 'validation_failed',
-          message: 'Accept the staging terms to create a key',
+          message: 'Accept the terms to create a key',
         });
       }
 
@@ -202,29 +97,6 @@ export const auth = betterAuth({
       ctx.body = rest;
     }),
     after: createAuthMiddleware(async (ctx) => {
-      if (ctx.path === '/organization/create') {
-        const returned = ctx.context.returned;
-        if (!returned || returned instanceof Error || returned instanceof Response) return;
-
-        const orgId = (returned as { id?: unknown }).id;
-        if (typeof orgId !== 'string') return;
-
-        await getPrisma().workspaceBilling.upsert({
-          where: { organizationId: orgId },
-          create: { organizationId: orgId, plan: 'free' },
-          update: {},
-        });
-
-        const session = await auth.api.getSession({ headers: ctx.headers ?? new Headers() });
-        if (session?.session.id) {
-          await getPrisma().session.update({
-            where: { id: session.session.id },
-            data: { activeOrganizationId: orgId },
-          });
-        }
-        return;
-      }
-
       if (ctx.path !== '/api-key/create') return;
 
       const returned = ctx.context.returned;
@@ -264,15 +136,22 @@ export const auth = betterAuth({
     },
     user: {
       create: {
+        // A closed instance refuses strangers before the user row exists (AC-07); the
+        // OAuth callback turns this into a redirect back to /sign-in carrying the message.
+        before: async (user) => {
+          if (!(await isSignupOpen(user.email))) {
+            throw new APIError('FORBIDDEN', { code: 'signup_closed', message: SIGNUP_CLOSED_MESSAGE });
+          }
+          return { data: user };
+        },
+        // Every user is a member of the one instance workspace; the first becomes owner.
         after: async (user) => {
-          await createPersonalOrganization(user);
+          await joinInstanceOrg(user);
         },
       },
     },
     session: {
       create: {
-        // The personal org exists by now (user.create.after runs first), so a fresh
-        // session can start in it instead of leaving the workspace unset.
         before: async (session) => {
           try {
             const githubAccount = await getPrisma().account.findFirst({
@@ -292,12 +171,15 @@ export const auth = betterAuth({
             // Background hook safety
           }
 
-          const member = await getPrisma().member.findFirst({
-            where: { userId: session.userId },
-            orderBy: { createdAt: 'asc' },
+          const user = await getPrisma().user.findUnique({
+            where: { id: session.userId },
+            select: { id: true, email: true },
           });
+          if (user) await syncMemberRole(user);
 
-          return { data: { ...session, activeOrganizationId: member?.organizationId ?? null } };
+          // A fresh session starts in the instance workspace.
+          const org = await getInstanceOrg();
+          return { data: { ...session, activeOrganizationId: org.id } };
         },
       },
     },
