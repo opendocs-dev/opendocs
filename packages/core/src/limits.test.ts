@@ -1,13 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
   CLI_MIN_VERSION,
-  DAILY_QUOTAS,
-  DRAFT_IMAGE_DAYS,
-  FREE_STORAGE_BYTES,
-  FREE_STEPS_PER_RUN,
-  GLOBAL_BREAKER_ALERT_BYTES,
-  GLOBAL_BREAKER_ALERT_RATIO,
-  GLOBAL_BREAKER_BYTES,
+  DEFAULT_DRAFT_IMAGE_DAYS,
+  DEFAULT_MAX_STEPS_PER_RUN,
   MAX_BYTES,
   MAX_PIXELS,
   PUBLIC_ID_LENGTH,
@@ -22,8 +17,8 @@ describe('limits and constants', () => {
     expect(MAX_BYTES).toBe(10485760);
   });
 
-  test('FREE_STEPS_PER_RUN equals 15', () => {
-    expect(FREE_STEPS_PER_RUN).toBe(15);
+  test('DEFAULT_MAX_STEPS_PER_RUN equals 15', () => {
+    expect(DEFAULT_MAX_STEPS_PER_RUN).toBe(15);
   });
 
   test('SNAP_TTL default is 24h', () => {
@@ -35,34 +30,12 @@ describe('limits and constants', () => {
     expect(SNAP_TTL.seconds['24h']).toBe(24 * 60 * 60);
   });
 
-  test('daily quota table matches D4', () => {
-    expect(DAILY_QUOTAS.free.files).toBe(200);
-    expect(DAILY_QUOTAS.free.bytes).toBe(200 * 1024 * 1024);
-
-    expect(DAILY_QUOTAS.pro.files).toBe(2000);
-    expect(DAILY_QUOTAS.pro.bytes).toBe(2 * 1024 * 1024 * 1024);
-
-    expect(DAILY_QUOTAS.enterprise.files).toBe(10000);
-    expect(DAILY_QUOTAS.enterprise.bytes).toBe(10 * 1024 * 1024 * 1024);
-  });
-
   test('MAX_PIXELS equals 50000000', () => {
     expect(MAX_PIXELS).toBe(50000000);
   });
 
-  test('DRAFT_IMAGE_DAYS equals 7', () => {
-    expect(DRAFT_IMAGE_DAYS).toBe(7);
-  });
-
-  test('FREE_STORAGE_BYTES equals 100 MiB', () => {
-    expect(FREE_STORAGE_BYTES).toBe(104_857_600);
-  });
-
-  test('GLOBAL_BREAKER_BYTES equals 50 GB with 80% alert threshold', () => {
-    expect(GLOBAL_BREAKER_BYTES).toBe(50 * 1024 * 1024 * 1024);
-    expect(GLOBAL_BREAKER_ALERT_RATIO).toBe(0.8);
-    expect(GLOBAL_BREAKER_ALERT_BYTES).toBe(40 * 1024 * 1024 * 1024);
-    expect(GLOBAL_BREAKER_ALERT_BYTES).toBe(GLOBAL_BREAKER_BYTES * 0.8);
+  test('DEFAULT_DRAFT_IMAGE_DAYS equals 7', () => {
+    expect(DEFAULT_DRAFT_IMAGE_DAYS).toBe(7);
   });
 
   test('PUBLIC_ID_LENGTH equals 16', () => {
