@@ -1,5 +1,5 @@
 {
   "name": "opendocs",
   "private": true,
-  "workspaces": ["packages/*"]
+  "workspaces": ["packages/*", "apps/*"]
 }
