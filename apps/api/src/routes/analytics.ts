@@ -4,10 +4,11 @@ import { getPrisma } from '../db';
 import { ApiError } from '../errors';
 import { startOfUtcDay } from '../quota';
 import { roleFor } from '../site/role';
+import { getInstanceOrg } from '../instance-org';
 
 const requireSessionAndMember = async (request: Request) => {
   const session = await auth.api.getSession({ headers: request.headers });
-  const organizationId = session?.session.activeOrganizationId;
+  const organizationId = session ? (await getInstanceOrg()).id : undefined;
   if (!session || !organizationId) {
     throw new ApiError(401, 'unauthorized', 'A valid session is required');
   }
