@@ -7,15 +7,6 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return apiRewrites();
   },
-  async redirects() {
-    return [
-      {
-        source: '/dashboard/domain',
-        destination: '/dashboard/site',
-        permanent: false,
-      },
-    ];
-  },
   async headers() {
     return [
       {

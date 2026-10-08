@@ -9,6 +9,7 @@ import { Elysia } from 'elysia';
 import { assetUrl } from '../asset-url';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
+import { hasMemberSession } from '../site/session';
 
 const notFound = () => new ApiError(404, 'not_found', 'Doc not found');
 
@@ -74,12 +75,14 @@ export const toDocStep = (step: StepForDoc): DocStep => {
  * JSON and markdown doc routes so the 404 rules (unknown, deleted, not compiled)
  * stay in one place.
  */
-const loadDoc = async (publicId: string) => {
+const loadDoc = async (publicId: string, request: Request) => {
   const flow = await getPrisma().flow.findFirst({
     where: { publicId, deletedAt: null, latestRunId: { not: null } },
-    select: { publicId: true, title: true, organizationId: true, latestRunId: true },
+    select: { publicId: true, title: true, organizationId: true, latestRunId: true, visibility: true },
   });
   if (!flow || !flow.latestRunId) throw notFound();
+  // A draft answers 404 to anonymous callers, like an unknown id (C23 AC-09).
+  if (flow.visibility === 'draft' && !(await hasMemberSession(request))) throw notFound();
 
   const steps = await getPrisma().step.findMany({
     where: { runId: flow.latestRunId, hidden: false },
@@ -243,10 +246,10 @@ const buildMarkdown = (
 export const docsRoute = new Elysia()
   .get(
     '/api/v1/docs/:publicId',
-    async ({ params, set }) => {
+    async ({ params, set, request }) => {
       set.headers['x-robots-tag'] = 'noindex';
 
-      const { flow, steps } = await loadDoc(params.publicId);
+      const { flow, steps } = await loadDoc(params.publicId, request);
 
       return {
         public_id: flow.publicId,
@@ -256,10 +259,10 @@ export const docsRoute = new Elysia()
     },
     { response: { 200: GetDocResponseSchema } },
   )
-  .get('/api/v1/docs/:publicId/markdown', async ({ params, set }) => {
+  .get('/api/v1/docs/:publicId/markdown', async ({ params, set, request }) => {
     set.headers['x-robots-tag'] = 'noindex';
 
-    const { flow, steps } = await loadDoc(params.publicId);
+    const { flow, steps } = await loadDoc(params.publicId, request);
     const body = buildMarkdown(
       flow.title,
       steps.map((step, index) => ({

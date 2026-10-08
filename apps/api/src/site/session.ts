@@ -64,3 +64,19 @@ export const requireMember = async (userId: string, organizationId: string) => {
   }
   return member;
 };
+
+/** True when the request carries a session of a member of the instance workspace (drafts are visible to them only, C23 AC-09). */
+export const hasMemberSession = async (request: Request): Promise<boolean> => {
+  try {
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!session) return false;
+    const organizationId = (await getInstanceOrg()).id;
+    const member = await getPrisma().member.findUnique({
+      where: { organizationId_userId: { organizationId, userId: session.user.id } },
+      select: { id: true },
+    });
+    return member !== null;
+  } catch {
+    return false;
+  }
+};

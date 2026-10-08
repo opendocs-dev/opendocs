@@ -6,6 +6,7 @@ import { ApiError } from '../errors';
 import { assetUrl } from '../asset-url';
 import { getInstanceOrg } from '../instance-org';
 import { toDocStep } from '../routes/docs';
+import { hasMemberSession } from './session';
 import { recordHelpfulVote, recordSearch, recordView } from '../analytics/events';
 import {
   getPublicAssistantConfig,
@@ -326,8 +327,10 @@ export const publicRoute = new Elysia()
       counts,
     };
   })
-  .get('/api/v1/site/guides/:guideSlug', async ({ params, set }) => {
-    set.headers['cache-control'] = CACHE_CONTROL;
+  .get('/api/v1/site/guides/:guideSlug', async ({ params, set, request }) => {
+    // Drafts are readable by signed-in members only, so those responses must not be cached publicly.
+    const member = await hasMemberSession(request);
+    set.headers['cache-control'] = member ? 'private, no-store' : CACHE_CONTROL;
     const organizationId = await requireWorkspace();
     const prisma = getPrisma();
 
@@ -337,7 +340,7 @@ export const publicRoute = new Elysia()
         slug: params.guideSlug,
         deletedAt: null,
         latestRunId: { not: null },
-        visibility: { in: ['published', 'unlisted'] },
+        visibility: { in: member ? ['published', 'unlisted', 'draft'] : ['published', 'unlisted'] },
       },
       select: {
         id: true,
@@ -357,7 +360,7 @@ export const publicRoute = new Elysia()
     });
     if (!flow) throw notFound();
 
-    if (flow.visibility === 'unlisted' || flow.noindex) set.headers['x-robots-tag'] = 'noindex';
+    if (flow.visibility !== 'published' || flow.noindex) set.headers['x-robots-tag'] = 'noindex';
 
     const steps = await prisma.step.findMany({
       where: { runId: flow.latestRunId!, hidden: false },

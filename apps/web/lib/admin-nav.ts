@@ -3,20 +3,8 @@ export type Role = 'owner' | 'admin' | 'editor';
 /** Toggle to enable the Categories menu item. */
 export const CATEGORIES_READY = true;
 
-/** Toggle to enable the Storage menu item. */
-export const STORAGE_READY = true;
-
-/** Toggle to enable the Plan and usage menu item. */
-export const PLAN_READY = true;
-
-/** Toggle to enable the Billing menu item. Default off; enabled when BILLING_READY === 'true'. */
-export const BILLING_READY = process.env.BILLING_READY === 'true';
-
 /** Toggle to enable the Activity log menu item. */
 export const ACTIVITY_READY = true;
-
-/** Toggle to enable the Assistant menu item. */
-export const ASSISTANT_READY = true;
 
 /**
  * Normalizes a role from the API, handling undefined, null, 'member' and unknown values.
@@ -75,43 +63,29 @@ export interface MenuGroup {
  * Builds the menu structure based on the user's role.
  * Omits groups with no items.
  */
-export function menuFor(role: Role, billingReady: boolean = process.env.BILLING_READY === 'true'): MenuGroup[] {
+export function menuFor(role: Role): MenuGroup[] {
   const groups: MenuGroup[] = [];
 
   // Content group (available to all roles)
   const contentItems: MenuItem[] = [
-    { href: '/dashboard', label: 'Overview' },
-    { href: '/dashboard/guides', label: 'Guides' },
+    { href: '/admin', label: 'Overview' },
+    { href: '/admin/guides', label: 'Guides' },
   ];
 
   if (CATEGORIES_READY) {
-    contentItems.push({ href: '/dashboard/categories', label: 'Categories' });
+    contentItems.push({ href: '/admin/categories', label: 'Categories' });
   }
-  contentItems.push({ href: '/dashboard/analytics', label: 'Analytics' });
+  contentItems.push({ href: '/admin/analytics', label: 'Analytics' });
 
   groups.push({ label: 'Content', items: contentItems });
-
-  // Assistant group (owner and admin only)
-  if (role === 'owner' || role === 'admin') {
-    if (ASSISTANT_READY) {
-      groups.push({
-        label: 'Assistant',
-        items: [
-          { href: '/dashboard/assistant', label: 'AI assistant' },
-          { href: '/dashboard/assistant/conversations', label: 'Conversations' },
-        ],
-      });
-    }
-  }
 
   // Site group (owner and admin only)
   if (role === 'owner' || role === 'admin') {
     groups.push({
       label: 'Site',
       items: [
-        { href: '/dashboard/site', label: 'Domain' },
-        { href: '/dashboard/site/appearance', label: 'Appearance' },
-        { href: '/dashboard/site/seo', label: 'SEO' },
+        { href: '/admin/site/appearance', label: 'Appearance' },
+        { href: '/admin/site/seo', label: 'SEO' },
       ],
     });
   }
@@ -119,20 +93,11 @@ export function menuFor(role: Role, billingReady: boolean = process.env.BILLING_
   // Workspace group (owner and admin only)
   if (role === 'owner' || role === 'admin') {
     const workspaceItems: MenuItem[] = [
-      { href: '/dashboard/members', label: 'Members' },
-      { href: '/dashboard/keys', label: 'API and MCP' },
+      { href: '/admin/members', label: 'Members' },
+      { href: '/admin/keys', label: 'API and MCP' },
     ];
     if (ACTIVITY_READY) {
-      workspaceItems.push({ href: '/dashboard/activity', label: 'Activity log' });
-    }
-    if (STORAGE_READY) {
-      workspaceItems.push({ href: '/dashboard/storage', label: 'Storage' });
-    }
-    if (billingReady && role === 'owner') {
-      workspaceItems.push({ href: '/dashboard/billing', label: 'Billing' });
-    }
-    if (PLAN_READY) {
-      workspaceItems.push({ href: '/dashboard/plan', label: 'Plan and usage' });
+      workspaceItems.push({ href: '/admin/activity', label: 'Activity log' });
     }
     groups.push({ label: 'Workspace', items: workspaceItems });
   }
@@ -142,12 +107,12 @@ export function menuFor(role: Role, billingReady: boolean = process.env.BILLING_
 
 /**
  * Checks if a link is active relative to the current pathname.
- * '/dashboard' and '/dashboard/site' match exactly so sibling site sections
- * (/dashboard/site/appearance, /dashboard/site/seo) do not both highlight.
+ * '/admin' and '/admin/site' match exactly so sibling site sections
+ * (/admin/site/appearance, /admin/site/seo) do not both highlight.
  * Other paths match the path and its sub-paths.
  */
 export function isActive(href: string, pathname: string): boolean {
-  if (href === '/dashboard' || href === '/dashboard/site' || href === '/dashboard/assistant') {
+  if (href === '/admin') {
     return pathname === href;
   }
   return pathname === href || pathname.startsWith(`${href}/`);

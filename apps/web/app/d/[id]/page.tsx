@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 
 import type { GetDocResponse } from '@opendocs/core';
@@ -17,8 +18,11 @@ import { bricolageGrotesque, figtree } from './fonts';
 type PageParams = { id: string };
 
 async function fetchDoc(id: string): Promise<GetDocResponse | null> {
+  // The cookie lets a signed-in member open a draft; anonymous visitors get a 404 for it (C23 AC-09).
+  const cookie = (await headers()).get('cookie') ?? '';
   const response = await fetch(`${apiOrigin()}/api/v1/docs/${encodeURIComponent(id)}`, {
     cache: 'no-store',
+    ...(cookie ? { headers: { cookie } } : {}),
   });
 
   if (!response.ok) return null;
@@ -26,7 +30,7 @@ async function fetchDoc(id: string): Promise<GetDocResponse | null> {
   return (await response.json()) as GetDocResponse;
 }
 
-/** Tenant-site URL for this doc, when it has one; null on any failure (unset domain, unpublished, etc). */
+/** Public docs-site URL for this doc, when it is published; null on any failure. */
 async function fetchCanonicalUrl(id: string): Promise<string | null> {
   try {
     const response = await fetch(`${apiOrigin()}/api/v1/docs/${encodeURIComponent(id)}/canonical`, {

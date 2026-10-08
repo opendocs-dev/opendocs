@@ -18,9 +18,6 @@
 # Optional runtime environment variables:
 #   PORT                     Port for Next.js server (default: 3000)
 #   BETTER_AUTH_URL          Canonical public base URL (e.g. http://localhost:3000)
-#   PUBLIC_APP_ORIGIN        Public domain/origin override for published guide links
-#   TENANT_BASE_DOMAIN       Base domain for tenant subdomain routing ({slug}.TENANT_BASE_DOMAIN)
-#   BILLING_READY            Set to "true" to display billing navigation and pages
 #   NEXT_TELEMETRY_DISABLED  Disable Next.js telemetry (default: 1)
 # ==============================================================================
 
