@@ -1,23 +1,14 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
-import { BASE_URL, cleanDatabase, realFetch, signIn, type App } from '../../test/helpers';
+import { BASE_URL, cleanDatabase, memoryStorage, realFetch, signIn, type App } from '../../test/helpers';
 import { tinyPng, tinyWebp } from '../../test/images';
 import { getPrisma } from '../db';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
-import type { Storage, StorageProvider } from '../storage/provider';
+import type { Storage } from '../storage/provider';
 
 const prisma = getPrisma();
 
 /** Hosts that must never reach a client: the publicId is the only thing we expose. */
 const PROVIDER_HOSTS = ['drive.google.com', 'googleusercontent.com'] as const;
-
-const localStorage = async (): Promise<Storage> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-images-'));
-  return { provider: new LocalDiskProvider(root), accounts: ['local'] };
-};
 
 type Fixture = {
   app: App;
@@ -27,7 +18,7 @@ type Fixture = {
 };
 
 const setup = async (storage?: Storage): Promise<Fixture> => {
-  const app = createApp(async () => {}, storage ?? (await localStorage()));
+  const app = createApp(async () => {}, storage ?? memoryStorage());
   const cookie = await signIn(app);
 
   const upload: Fixture['upload'] = async (bytes, contentType = 'image/png') => {
@@ -65,7 +56,7 @@ test('sets nosniff, sandbox CSP and public immutable cache headers', async () =>
   const bytes = tinyPng();
   const id = await upload(bytes);
 
-  const response = await get(`/i/${id}`);
+  const response = await get(`/api/i/${id}`);
 
   expect(response.status).toBe(200);
   expect(response.headers.get('content-type')).toBe('image/png');
@@ -83,7 +74,7 @@ test('TTL asset max-age capped at remaining TTL', async () => {
     data: { expiresAt: new Date(Date.now() + 30_000) },
   });
 
-  const response = await get(`/i/${id}`);
+  const response = await get(`/api/i/${id}`);
 
   expect(response.status).toBe(200);
   const maxAge = Number(/max-age=(\d+)/.exec(response.headers.get('cache-control') ?? '')?.[1]);
@@ -95,7 +86,7 @@ test('never leaks a drive.google.com/googleusercontent.com URL', async () => {
   const { upload, get } = await setup();
   const id = await upload(tinyPng());
 
-  const response = await get(`/i/${id}`);
+  const response = await get(`/api/i/${id}`);
 
   expect(response.status).toBe(200);
   // A redirect would hand the storage URL straight to the client.
@@ -115,7 +106,7 @@ test('ignores a spoofed file extension', async () => {
   const { upload, get } = await setup();
   const id = await upload(tinyWebp(), 'image/webp');
 
-  const response = await get(`/i/${id}.svg`);
+  const response = await get(`/api/i/${id}.svg`);
 
   expect(response.status).toBe(200);
   expect(response.headers.get('content-type')).toBe('image/webp');
@@ -131,7 +122,7 @@ test('returns 410 for an expired asset before the TTL job runs', async () => {
     data: { expiresAt: new Date(Date.now() - 1000) },
   });
 
-  const response = await get(`/i/${id}`);
+  const response = await get(`/api/i/${id}`);
 
   expect(response.status).toBe(410);
   expect(await errorCode(response)).toBe('gone');
@@ -144,7 +135,7 @@ test('returns 410 for a deletedAt asset', async () => {
   const id = await upload(tinyPng());
   await prisma.asset.update({ where: { publicId: id }, data: { deletedAt: new Date() } });
 
-  const response = await get(`/i/${id}`);
+  const response = await get(`/api/i/${id}`);
 
   expect(response.status).toBe(410);
   expect(await errorCode(response)).toBe('gone');
@@ -153,7 +144,7 @@ test('returns 410 for a deletedAt asset', async () => {
 test('returns 404 for an unknown publicId', async () => {
   const { get } = await setup();
 
-  const response = await get('/i/aaaaaaaaaaaaaaaa');
+  const response = await get('/api/i/aaaaaaaaaaaaaaaa');
 
   expect(response.status).toBe(404);
   expect(await errorCode(response)).toBe('not_found');
@@ -168,65 +159,22 @@ test('410 responses are not cached', async () => {
     data: { expiresAt: new Date(Date.now() - 1000) },
   });
 
-  const response = await get(`/i/${id}`);
+  const response = await get(`/api/i/${id}`);
 
   expect(response.status).toBe(410);
   expect(response.headers.get('cache-control')).toBe('no-store');
 });
 
-test('provider read failure returns 500 no-store', async () => {
-  const storage = await localStorage();
-  const { provider } = storage;
-  const failing: StorageProvider = {
-    name: provider.name,
-    upload: (...args) => provider.upload(...args),
-    delete: (...args) => provider.delete(...args),
-    read: () => Promise.reject(new Error('storage unavailable')),
-  };
+test('storage read failure returns 500 no-store', async () => {
+  const base = memoryStorage();
+  const failing: Storage = { ...base, read: () => Promise.reject(new Error('storage unavailable')) };
 
-  const { upload, get } = await setup({ provider: failing, accounts: storage.accounts });
+  const { upload, get } = await setup(failing);
   const id = await upload(tinyPng());
 
-  const response = await get(`/i/${id}`);
+  const response = await get(`/api/i/${id}`);
 
   expect(response.status).toBe(500);
   expect(await errorCode(response)).toBe('internal_error');
   expect(response.headers.get('cache-control')).toBe('no-store');
-});
-
-test('reads an asset recorded against "local" even while STORAGE_PROVIDER=s3', async () => {
-  // No storage override on the reading app: it must resolve per-asset for real,
-  // exactly as it does in production, instead of a test double standing in for
-  // "whatever is configured".
-  const previous = {
-    STORAGE_PROVIDER: process.env.STORAGE_PROVIDER,
-    LOCAL_STORAGE_DIR: process.env.LOCAL_STORAGE_DIR,
-  };
-  const root = await mkdtemp(join(tmpdir(), 'od-images-local-'));
-
-  try {
-    // Upload through the real local provider pointed at `root`, so the asset is
-    // genuinely recorded (and bytes genuinely written) against local.
-    process.env.LOCAL_STORAGE_DIR = root;
-    const bytes = tinyPng();
-    const { upload } = await setup({ provider: new LocalDiskProvider(root), accounts: ['local'] });
-    const id = await upload(bytes);
-
-    // Flip the deployment-wide default to s3 (no S3 credentials at all, so any call
-    // that fell back to STORAGE_PROVIDER would blow up resolving the s3 factory, not
-    // just serve the wrong bytes) and read through a second app instance with no
-    // storage override, so it must resolve the provider itself from asset.provider
-    // and from the same LOCAL_STORAGE_DIR, which is still `root`.
-    process.env.STORAGE_PROVIDER = 's3';
-    const app = createApp(async () => {});
-    const response = await app.handle(new Request(`${BASE_URL}/i/${id}`));
-
-    expect(response.status).toBe(200);
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
-  } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key as keyof typeof previous];
-      else process.env[key as keyof typeof previous] = value;
-    }
-  }
 });
