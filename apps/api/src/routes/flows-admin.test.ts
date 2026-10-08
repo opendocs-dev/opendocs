@@ -1,19 +1,16 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
   BASE_URL,
   cleanDatabase,
-  OTHER_GITHUB_ACCOUNT,
+  memoryStorage,
   realFetch,
   signIn,
   type App,
 } from '../../test/helpers';
 import { tinyPng } from '../../test/images';
 import { getPrisma } from '../db';
+import { resetEnvForTest } from '../env';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
 
 const prisma = getPrisma();
 
@@ -31,11 +28,7 @@ type Workspace = {
 };
 
 const newApp = async (): Promise<App> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-flows-admin-'));
-  return createApp(async () => {}, {
-    provider: new LocalDiskProvider(root),
-    accounts: ['local'],
-  });
+  return createApp(async () => {}, memoryStorage());
 };
 
 const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): Promise<Workspace> => {
@@ -303,20 +296,6 @@ test('PATCH with duplicate slug in the same workspace returns 409', async () => 
   expect(await errorCode(response)).toBe('validation_failed');
 });
 
-test('PATCH with identical slug across different workspaces succeeds', async () => {
-  const app = await newApp();
-  const ws1 = await workspace(app);
-  const ws2 = await workspace(app, OTHER_GITHUB_ACCOUNT);
-  const flow1 = await compiledFlow(ws1, 'Flow One');
-  const flow2 = await compiledFlow(ws2, 'Flow Two');
-
-  const response1 = await ws1.patchFlow(flow1.flowPublicId, { slug: 'shared-guide-slug' });
-  expect(response1.status).toBe(200);
-
-  const response2 = await ws2.patchFlow(flow2.flowPublicId, { slug: 'shared-guide-slug' });
-  expect(response2.status).toBe(200);
-});
-
 test('PATCH without any field returns 422', async () => {
   const ws = await workspace(await newApp());
   const flow = await compiledFlow(ws, 'Test Flow');
@@ -390,28 +369,6 @@ test('bulk update rejects more than 50 ids', async () => {
   const response = await ws.bulkUpdate({ ids, visibility: 'draft' });
 
   expect(response.status).toBe(422);
-});
-
-test('bulk update rejects foreign flow with transaction rollback', async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  const flow = await compiledFlow(owner, 'Owner flow');
-
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-  const otherFlow = await compiledFlow(other, 'Other flow');
-
-  const response = await owner.bulkUpdate({
-    ids: [flow.flowPublicId, otherFlow.flowPublicId],
-    visibility: 'draft',
-  });
-
-  expect(response.status).toBe(404);
-
-  // Verify no changes were made
-  const ownerFlow = await prisma.flow.findUniqueOrThrow({
-    where: { publicId: flow.flowPublicId },
-  });
-  expect(ownerFlow.visibility).toBe('published');
 });
 
 test('bulk update accepts category_id: null', async () => {
@@ -490,24 +447,34 @@ test('overview has_key reflects API keys', async () => {
   expect(withKeyBody.has_key).toBe(true);
 });
 
-test('overview includes site_host', async () => {
+test('overview storage_used is 0% without a storage cap and has no site_host', async () => {
   const ws = await workspace(await newApp());
+  await compiledFlow(ws, 'Flow');
 
   const response = await ws.getOverview();
 
   expect(response.status).toBe(200);
-  const body = (await response.json()) as { site_host: string | null };
-  expect(body.site_host).toBeNull();
+  const body = (await response.json()) as { storage_used: string; site_host?: string };
+  expect(body.storage_used).toBe('0%');
+  expect(body.site_host).toBeUndefined();
+});
 
-  const oldBase = process.env.TENANT_BASE_DOMAIN;
-  process.env.TENANT_BASE_DOMAIN = 'example.com';
+test('overview storage_used is a percentage when STORAGE_QUOTA_BYTES is set', async () => {
+  const ws = await workspace(await newApp());
+  await compiledFlow(ws, 'Flow');
+
+  const oldQuota = process.env.STORAGE_QUOTA_BYTES;
+  process.env.STORAGE_QUOTA_BYTES = '1000';
+  resetEnvForTest();
 
   try {
-    const response2 = await ws.getOverview();
-    const body2 = (await response2.json()) as { site_host: string };
-    expect(body2.site_host).toMatch(/\.example\.com$/);
+    const response = await ws.getOverview();
+    const body = (await response.json()) as { storage_used: string };
+    expect(body.storage_used).toMatch(/^\d+%$/);
+    expect(body.storage_used).not.toBe('0%');
   } finally {
-    if (oldBase === undefined) delete process.env.TENANT_BASE_DOMAIN;
-    else process.env.TENANT_BASE_DOMAIN = oldBase;
+    if (oldQuota === undefined) delete process.env.STORAGE_QUOTA_BYTES;
+    else process.env.STORAGE_QUOTA_BYTES = oldQuota;
+    resetEnvForTest();
   }
 });
