@@ -1,7 +1,7 @@
 import { getPrisma } from '../db';
 import type { Prisma } from '../../generated/prisma/client';
 
-export type ActorKind = 'user' | 'apikey' | 'staff';
+export type ActorKind = 'user' | 'apikey';
 
 export type AuditLogEntry = {
   actorKind: ActorKind;

@@ -6,7 +6,6 @@ import {
   CreateRunBodySchema,
   CreateRunResponseSchema,
   DEFAULT_DRAFT_IMAGE_DAYS,
-  DEFAULT_MAX_STEPS_PER_RUN,
   PUBLIC_ID_LENGTH,
   type AddStepBody,
   type CompileRunBody,
@@ -21,7 +20,7 @@ import { getPrisma } from '../db';
 import { docUrl } from '../doc-url';
 import { ApiError } from '../errors';
 import { newPublicId } from '../ids';
-import { getPlan } from '../plan';
+import { checkStepLimit } from '../quota';
 import { makeGuideSlug, uniqueGuideSlug } from '../site/guide-slug';
 import { refreshSearchDocument } from '../site/search-doc';
 
@@ -140,8 +139,6 @@ export const runsRoute = new Elysia()
       });
       if (!asset) throw notFound('Asset not found');
 
-      const plan = await getPlan(organizationId);
-
       const step = await prisma.$transaction(async (tx) => {
         // The row lock serialises concurrent writers, so the count below and the order it
         // produces cannot be stale.
@@ -152,13 +149,7 @@ export const runsRoute = new Elysia()
         }
         const count = await tx.step.count({ where: { runId: run.id } });
 
-        if (plan === 'free' && count >= DEFAULT_MAX_STEPS_PER_RUN) {
-          throw new ApiError(
-            422,
-            'step_limit',
-            `Free workspaces are limited to ${DEFAULT_MAX_STEPS_PER_RUN} steps per run`,
-          );
-        }
+        checkStepLimit(count);
 
         const created = await tx.step.create({
           data: {

@@ -1,12 +1,9 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
-import { BASE_URL, cleanDatabase, OTHER_GITHUB_ACCOUNT, realFetch, signIn, type App } from '../../test/helpers';
+import { BASE_URL, cleanDatabase, memoryStorage, realFetch, signIn, type App } from '../../test/helpers';
 import { tinyPng } from '../../test/images';
 import { getPrisma } from '../db';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
+import { getInstanceOrg } from '../instance-org';
 
 const prisma = getPrisma();
 
@@ -14,20 +11,13 @@ type Workspace = {
   app: App;
   cookie: string;
   organizationId: string;
-  workspaceSlug: string;
   upload: () => Promise<string>;
   createRun: (body?: unknown) => Promise<Response>;
   addStep: (sessionId: string, body: unknown) => Promise<Response>;
   compile: (sessionId: string, body?: unknown) => Promise<Response>;
 };
 
-const newApp = async (): Promise<App> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-site-public-'));
-  return createApp(async () => {}, {
-    provider: new LocalDiskProvider(root),
-    accounts: ['local'],
-  });
-};
+const newApp = async (): Promise<App> => createApp(async () => {}, memoryStorage());
 
 const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): Promise<Workspace> => {
   const cookie = await signIn(app, account);
@@ -40,19 +30,12 @@ const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): 
       }),
     );
 
-  const session = await prisma.session.findFirstOrThrow({
-    where: { activeOrganizationId: { not: null } },
-    orderBy: { createdAt: 'desc' },
-  });
-  const organization = await prisma.organization.findUniqueOrThrow({
-    where: { id: session.activeOrganizationId! },
-  });
+  const organization = await getInstanceOrg();
 
   return {
     app,
     cookie,
     organizationId: organization.id,
-    workspaceSlug: organization.slug,
     upload: async () => {
       const response = await app.handle(
         new Request(`${BASE_URL}/api/v1/assets`, {
@@ -93,26 +76,23 @@ const compiledGuide = async (
   return prisma.flow.findUniqueOrThrow({ where: { id: run.flowId } });
 };
 
-const siteInfo = (app: App, slug: string) =>
-  app.handle(new Request(`${BASE_URL}/api/v1/site/${encodeURIComponent(slug)}/info`));
+const siteInfo = (app: App) => app.handle(new Request(`${BASE_URL}/api/v1/site/info`));
 
-const listGuides = (app: App, slug: string, query = '') =>
-  app.handle(new Request(`${BASE_URL}/api/v1/site/${encodeURIComponent(slug)}/guides${query}`));
+const listGuides = (app: App, query = '') => app.handle(new Request(`${BASE_URL}/api/v1/site/guides${query}`));
 
-const search = (app: App, slug: string, q: string, category?: string) =>
+const search = (app: App, q: string, category?: string) =>
   app.handle(
     new Request(
-      `${BASE_URL}/api/v1/site/${encodeURIComponent(slug)}/search?q=${encodeURIComponent(q)}${
+      `${BASE_URL}/api/v1/site/search?q=${encodeURIComponent(q)}${
         category ? `&category=${encodeURIComponent(category)}` : ''
       }`,
     ),
   );
 
-const getGuide = (app: App, slug: string, guideSlug: string) =>
-  app.handle(new Request(`${BASE_URL}/api/v1/site/${encodeURIComponent(slug)}/guides/${encodeURIComponent(guideSlug)}`));
+const getGuide = (app: App, guideSlug: string) =>
+  app.handle(new Request(`${BASE_URL}/api/v1/site/guides/${encodeURIComponent(guideSlug)}`));
 
-const getCategories = (app: App, slug: string) =>
-  app.handle(new Request(`${BASE_URL}/api/v1/site/${encodeURIComponent(slug)}/categories`));
+const getCategories = (app: App) => app.handle(new Request(`${BASE_URL}/api/v1/site/categories`));
 
 const getCanonical = (app: App, publicId: string) =>
   app.handle(new Request(`${BASE_URL}/api/v1/docs/${encodeURIComponent(publicId)}/canonical`));
@@ -139,7 +119,7 @@ test('site info falls back to the organization name and counts only listed guide
   const unlisted = await compiledGuide(ws, 'Unlisted guide');
   await prisma.flow.update({ where: { id: unlisted.id }, data: { visibility: 'unlisted' } });
 
-  const response = await siteInfo(app, ws.workspaceSlug);
+  const response = await siteInfo(app);
   expect(response.status).toBe(200);
   expect(response.headers.get('cache-control')).toBe('public, max-age=30');
 
@@ -149,31 +129,29 @@ test('site info falls back to the organization name and counts only listed guide
     tagline: string;
     preset: string;
     indexing: boolean;
-    is_free_plan: boolean;
     guides: number;
   };
   expect(body.title).toBe(organization.name);
   expect(body.tagline).toBe('');
   expect(body.preset).toBe('sage');
   expect(body.indexing).toBe(true);
-  expect(body.is_free_plan).toBe(true);
   expect(body.guides).toBe(1);
 });
 
-test('site info uses the WorkspaceSite title when one has been set', async () => {
+test('site info uses the SiteSettings title when one has been set', async () => {
   const app = await newApp();
   const ws = await workspace(app);
-  await prisma.workspaceSite.create({
+  await prisma.siteSettings.create({
     data: { organizationId: ws.organizationId, siteTitle: 'Custom Title', tagline: 'A tagline', indexing: false },
   });
 
-  const body = (await (await siteInfo(app, ws.workspaceSlug)).json()) as { title: string; tagline: string; indexing: boolean };
+  const body = (await (await siteInfo(app)).json()) as { title: string; tagline: string; indexing: boolean };
   expect(body.title).toBe('Custom Title');
   expect(body.tagline).toBe('A tagline');
   expect(body.indexing).toBe(false);
 });
 
-test('site info exposes description, favicon, share image and custom meta', async () => {
+test('site info exposes description, favicon and share image', async () => {
   const app = await newApp();
   const ws = await workspace(app);
   const favicon = await prisma.asset.create({
@@ -181,8 +159,6 @@ test('site info exposes description, favicon, share image and custom meta', asyn
       publicId: 'faviconpub01',
       organizationId: ws.organizationId,
       kind: 'brand',
-      provider: 'local',
-      providerAccount: 'local',
       providerFileId: crypto.randomUUID(),
       mime: 'image/png',
       bytes: 100,
@@ -192,49 +168,44 @@ test('site info exposes description, favicon, share image and custom meta', asyn
       expiresAt: null,
     },
   });
-  await prisma.workspaceSite.create({
+  await prisma.siteSettings.create({
     data: {
       organizationId: ws.organizationId,
       siteTitle: 'Custom Title',
       description: 'A helpful site',
       faviconAssetId: favicon.id,
-      customMeta: [{ name: 'theme-color', content: '#0f6b54' }],
     },
   });
 
-  const body = (await (await siteInfo(app, ws.workspaceSlug)).json()) as {
+  const body = (await (await siteInfo(app)).json()) as {
     description: string;
     favicon_url: string | null;
     og_image_url: string | null;
-    custom_meta: { name: string; content: string }[];
   };
   expect(body.description).toBe('A helpful site');
-  expect(body.favicon_url).toBe(`${process.env.ASSET_BASE_URL}/i/${favicon.publicId}`);
+  expect(body.favicon_url).toBe(`${BASE_URL}/api/i/${favicon.publicId}`);
   expect(body.og_image_url).toBeNull();
-  expect(body.custom_meta).toEqual([{ name: 'theme-color', content: '#0f6b54' }]);
+  expect(body).not.toHaveProperty('custom_meta');
 });
 
-test('site info defaults description to empty and favicon/og/custom_meta to empty when unset', async () => {
+test('site info defaults description to empty and favicon/og to empty when unset', async () => {
   const app = await newApp();
   const ws = await workspace(app);
 
-  const body = (await (await siteInfo(app, ws.workspaceSlug)).json()) as {
+  const body = (await (await siteInfo(app)).json()) as {
     description: string;
     favicon_url: string | null;
     og_image_url: string | null;
-    custom_meta: { name: string; content: string }[];
   };
   expect(body.description).toBe('');
   expect(body.favicon_url).toBeNull();
   expect(body.og_image_url).toBeNull();
-  expect(body.custom_meta).toEqual([]);
 });
 
-test('site info returns custom branding for enterprise workspace and null for non-enterprise', async () => {
+test('site info returns custom branding as stored, with no plan gating', async () => {
   const app = await newApp();
   const ws = await workspace(app);
-
-  await prisma.workspaceSite.create({
+  await prisma.siteSettings.create({
     data: {
       organizationId: ws.organizationId,
       siteTitle: 'Branded Site',
@@ -245,45 +216,50 @@ test('site info returns custom branding for enterprise workspace and null for no
     },
   });
 
-  // On free plan: custom branding is null
-  const freeBody = (await (await siteInfo(app, ws.workspaceSlug)).json()) as {
-    accent: string | null;
-    mark: string | null;
-    font: string | null;
-    radius: number | null;
-  };
-  expect(freeBody.accent).toBeNull();
-  expect(freeBody.mark).toBeNull();
-  expect(freeBody.font).toBeNull();
-  expect(freeBody.radius).toBeNull();
-
-  // Upgrade to enterprise plan: custom branding is returned
-  await prisma.workspaceBilling.create({
-    data: { organizationId: ws.organizationId, plan: 'enterprise' },
-  });
-
-  const entBody = (await (await siteInfo(app, ws.workspaceSlug)).json()) as {
-    accent: string | null;
-    mark: string | null;
-    font: string | null;
-    radius: number | null;
-  };
-  expect(entBody.accent).toBe('#6B2FBF');
-  expect(entBody.mark).toBe('#FFD54A');
-  expect(entBody.font).toBe('DM Sans');
-  expect(entBody.radius).toBe(10);
+  const body = (await (await siteInfo(app)).json()) as Record<string, unknown>;
+  expect(body.accent).toBe('#6B2FBF');
+  expect(body.mark).toBe('#FFD54A');
+  expect(body.font).toBe('DM Sans');
+  expect(body.radius).toBe(10);
+  expect(body).not.toHaveProperty('is_free_plan');
 });
 
-test('site info for an unknown or suspended workspace is the same 404', async () => {
+test('every public endpoint answers without a workspace slug and 404s the old slugged paths', async () => {
   const app = await newApp();
   const ws = await workspace(app);
-  await prisma.organization.update({ where: { id: ws.organizationId }, data: { suspendedAt: new Date() } });
+  const guide = await compiledGuide(ws, 'Reachable guide');
 
-  const suspended = await siteInfo(app, ws.workspaceSlug);
-  const unknown = await siteInfo(app, 'totally-unknown-workspace');
+  for (const path of ['/info', '/categories', '/guides', '/search?q=reachable', `/guides/${guide.slug}`, '/assistant']) {
+    const response = await app.handle(new Request(`${BASE_URL}/api/v1/site${path}`));
+    expect(response.status).toBe(200);
+  }
 
-  expect(suspended.status).toBe(unknown.status);
-  expect(await errorBody(suspended)).toEqual(await errorBody(unknown));
+  const old = await app.handle(new Request(`${BASE_URL}/api/v1/site/main/guides`));
+  expect(old.status).toBe(404);
+});
+
+test('an unknown guide slug is 404 not_found', async () => {
+  const app = await newApp();
+  const response = await getGuide(app, 'no-such-guide');
+  expect(response.status).toBe(404);
+  expect((await errorBody(response)).error.code).toBe('not_found');
+});
+
+test('the assistant is reported disabled and chat is 404 when AI is off', async () => {
+  const app = await newApp();
+
+  const assistant = await app.handle(new Request(`${BASE_URL}/api/v1/site/assistant`));
+  expect(assistant.status).toBe(200);
+  expect(await assistant.json()).toEqual({ enabled: false });
+
+  const chat = await app.handle(
+    new Request(`${BASE_URL}/api/v1/site/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'hello' }),
+    }),
+  );
+  expect(chat.status).toBe(404);
 });
 
 test('lists only published, compiled flows ordered by lastRunAt desc', async () => {
@@ -309,7 +285,7 @@ test('lists only published, compiled flows ordered by lastRunAt desc', async () 
   }).session_id;
   await ws.addStep(uncompiledSession, stepBody(uncompiledAssetId));
 
-  const response = await listGuides(app, ws.workspaceSlug);
+  const response = await listGuides(app);
   expect(response.status).toBe(200);
   expect(response.headers.get('cache-control')).toBe('public, max-age=30');
 
@@ -329,10 +305,10 @@ test('limit is capped at 50 and non-numeric limit/offset fall back to defaults',
   const ws = await workspace(app);
   await compiledGuide(ws, 'Just one guide');
 
-  const capped = await listGuides(app, ws.workspaceSlug, '?limit=999');
+  const capped = await listGuides(app, '?limit=999');
   expect(capped.status).toBe(200);
 
-  const defaulted = await listGuides(app, ws.workspaceSlug, '?limit=abc&offset=xyz');
+  const defaulted = await listGuides(app, '?limit=abc&offset=xyz');
   expect(defaulted.status).toBe(200);
   const body = (await defaulted.json()) as { guides: unknown[] };
   expect(body.guides).toHaveLength(1);
@@ -344,43 +320,9 @@ test('summary falls back to the first step instruction cut at 160 chars', async 
   const longInstruction = 'x'.repeat(200);
   await compiledGuide(ws, 'Long instruction guide', longInstruction);
 
-  const response = await listGuides(app, ws.workspaceSlug);
+  const response = await listGuides(app);
   const body = (await response.json()) as { guides: Array<{ summary: string }> };
   expect(body.guides[0]!.summary).toBe(`${'x'.repeat(160)}…`);
-});
-
-test('two workspaces never see each others guides', async () => {
-  const app = await newApp();
-  const one = await workspace(app);
-  const two = await workspace(app, OTHER_GITHUB_ACCOUNT);
-
-  await compiledGuide(one, 'Workspace one guide');
-  await compiledGuide(two, 'Workspace two guide');
-
-  const oneList = (await (await listGuides(app, one.workspaceSlug)).json()) as { guides: Array<{ title: string }> };
-  const twoList = (await (await listGuides(app, two.workspaceSlug)).json()) as { guides: Array<{ title: string }> };
-
-  expect(oneList.guides.map((g) => g.title)).toEqual(['Workspace one guide']);
-  expect(twoList.guides.map((g) => g.title)).toEqual(['Workspace two guide']);
-});
-
-test('unknown workspace slug is 404 not_found', async () => {
-  const app = await newApp();
-  const response = await listGuides(app, 'totally-unknown-workspace');
-  expect(response.status).toBe(404);
-  expect((await errorBody(response)).error.code).toBe('not_found');
-});
-
-test('a suspended workspace is 404, identical to an unknown one', async () => {
-  const app = await newApp();
-  const ws = await workspace(app);
-  await prisma.organization.update({ where: { id: ws.organizationId }, data: { suspendedAt: new Date() } });
-
-  const suspended = await listGuides(app, ws.workspaceSlug);
-  const unknown = await listGuides(app, 'totally-unknown-workspace');
-
-  expect(suspended.status).toBe(unknown.status);
-  expect(await errorBody(suspended)).toEqual(await errorBody(unknown));
 });
 
 test('search finds a title word, a summary word and a step-instruction word', async () => {
@@ -398,17 +340,17 @@ test('search finds a title word, a summary word and a step-instruction word', as
     WHERE id = ${summaryMatch.id}
   `;
 
-  const byTitle = (await (await search(app, ws.workspaceSlug, 'whatsapp')).json()) as {
+  const byTitle = (await (await search(app, 'whatsapp')).json()) as {
     results: Array<{ slug: string }>;
   };
   expect(byTitle.results.map((r) => r.slug)).toContain(titleMatch.slug!);
 
-  const byStep = (await (await search(app, ws.workspaceSlug, 'invoice')).json()) as {
+  const byStep = (await (await search(app, 'invoice')).json()) as {
     results: Array<{ slug: string }>;
   };
   expect(byStep.results.map((r) => r.slug)).toContain(stepMatch.slug!);
 
-  const bySummary = (await (await search(app, ws.workspaceSlug, 'billing')).json()) as {
+  const bySummary = (await (await search(app, 'billing')).json()) as {
     results: Array<{ slug: string }>;
   };
   expect(bySummary.results.map((r) => r.slug)).toContain(summaryMatch.slug!);
@@ -421,7 +363,7 @@ test('a title match ranks above a step-only match', async () => {
   const titleMatch = await compiledGuide(ws, 'Template guide', 'Click the button');
   const stepOnly = await compiledGuide(ws, 'Unrelated guide', 'Fill in the template field');
 
-  const response = await search(app, ws.workspaceSlug, 'template');
+  const response = await search(app, 'template');
   const body = (await response.json()) as { results: Array<{ slug: string }> };
 
   const titleIndex = body.results.findIndex((r) => r.slug === titleMatch.slug!);
@@ -436,15 +378,14 @@ test('a prefix query finds a longer word', async () => {
   const ws = await workspace(app);
   const guide = await compiledGuide(ws, 'A template guide');
 
-  const response = await search(app, ws.workspaceSlug, 'temp');
+  const response = await search(app, 'temp');
   const body = (await response.json()) as { results: Array<{ slug: string }> };
   expect(body.results.map((r) => r.slug)).toContain(guide.slug!);
 });
 
-test('unlisted, draft, deleted and other-workspace flows never show up in search', async () => {
+test('unlisted, draft and deleted flows never show up in search', async () => {
   const app = await newApp();
   const one = await workspace(app);
-  const two = await workspace(app, OTHER_GITHUB_ACCOUNT);
 
   const unlisted = await compiledGuide(one, 'Unlisted template');
   await prisma.flow.update({ where: { id: unlisted.id }, data: { visibility: 'unlisted' } });
@@ -455,9 +396,7 @@ test('unlisted, draft, deleted and other-workspace flows never show up in search
   const deleted = await compiledGuide(one, 'Deleted template');
   await prisma.flow.update({ where: { id: deleted.id }, data: { deletedAt: new Date() } });
 
-  await compiledGuide(two, 'Other workspace template');
-
-  const response = await search(app, one.workspaceSlug, 'template');
+  const response = await search(app, 'template');
   const body = (await response.json()) as { results: unknown[] };
   expect(body.results).toEqual([]);
 });
@@ -467,7 +406,7 @@ test('empty query returns no results', async () => {
   const ws = await workspace(app);
   await compiledGuide(ws, 'Some guide');
 
-  const response = await search(app, ws.workspaceSlug, '   ');
+  const response = await search(app, '   ');
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ results: [], counts: [] });
 });
@@ -477,10 +416,10 @@ test('SQL-ish query characters never cause a server error', async () => {
   const ws = await workspace(app);
   await compiledGuide(ws, 'Some guide');
 
-  const injection = await search(app, ws.workspaceSlug, `'; drop table "Flow";--`);
+  const injection = await search(app, `'; drop table "Flow";--`);
   expect(injection.status).toBe(200);
 
-  const operators = await search(app, ws.workspaceSlug, 'a & b | !c');
+  const operators = await search(app, 'a & b | !c');
   expect(operators.status).toBe(200);
 
   expect(await prisma.flow.count()).toBeGreaterThan(0);
@@ -492,7 +431,7 @@ test('guide JSON opens for an unlisted flow with noindex, matches the doc shape 
   const guide = await compiledGuide(ws, 'Unlisted but reachable');
   await prisma.flow.update({ where: { id: guide.id }, data: { visibility: 'unlisted' } });
 
-  const response = await getGuide(app, ws.workspaceSlug, guide.slug!);
+  const response = await getGuide(app, guide.slug!);
   expect(response.status).toBe(200);
   expect(response.headers.get('x-robots-tag')).toBe('noindex');
 
@@ -522,7 +461,7 @@ test('guide JSON exposes seo_title, seo_description and noindex', async () => {
     data: { seoTitle: 'Custom SEO Title', seoDescription: 'Custom SEO description', noindex: true },
   });
 
-  const response = await getGuide(app, ws.workspaceSlug, guide.slug!);
+  const response = await getGuide(app, guide.slug!);
   expect(response.status).toBe(200);
   // noindex is independent of visibility: a published guide with noindex still gets the header.
   expect(response.headers.get('x-robots-tag')).toBe('noindex');
@@ -542,7 +481,7 @@ test('guide JSON has null seo_title/seo_description and noindex false by default
   const ws = await workspace(app);
   const guide = await compiledGuide(ws, 'Plain guide');
 
-  const body = (await (await getGuide(app, ws.workspaceSlug, guide.slug!)).json()) as {
+  const body = (await (await getGuide(app, guide.slug!)).json()) as {
     seo_title: string | null;
     seo_description: string | null;
     noindex: boolean;
@@ -552,10 +491,9 @@ test('guide JSON has null seo_title/seo_description and noindex false by default
   expect(body.noindex).toBe(false);
 });
 
-test('draft, deleted, other-workspace and unknown guide slugs all get the identical 404 body', async () => {
+test('draft, deleted and unknown guide slugs all get the identical 404 body', async () => {
   const app = await newApp();
   const one = await workspace(app);
-  const two = await workspace(app, OTHER_GITHUB_ACCOUNT);
 
   const draft = await compiledGuide(one, 'Draft guide');
   await prisma.flow.update({ where: { id: draft.id }, data: { visibility: 'draft' } });
@@ -563,90 +501,49 @@ test('draft, deleted, other-workspace and unknown guide slugs all get the identi
   const deleted = await compiledGuide(one, 'Deleted guide');
   await prisma.flow.update({ where: { id: deleted.id }, data: { deletedAt: new Date() } });
 
-  const otherGuide = await compiledGuide(two, 'Other workspace guide');
-
-  const unknownBody = await errorBody(await getGuide(app, one.workspaceSlug, 'totally-unknown-slug'));
-  const draftBody = await errorBody(await getGuide(app, one.workspaceSlug, draft.slug!));
-  const deletedBody = await errorBody(await getGuide(app, one.workspaceSlug, deleted.slug!));
-  const otherWorkspaceBody = await errorBody(await getGuide(app, one.workspaceSlug, otherGuide.slug!));
+  const unknownBody = await errorBody(await getGuide(app, 'totally-unknown-slug'));
+  const draftBody = await errorBody(await getGuide(app, draft.slug!));
+  const deletedBody = await errorBody(await getGuide(app, deleted.slug!));
 
   expect(draftBody).toEqual(unknownBody);
   expect(deletedBody).toEqual(unknownBody);
-  expect(otherWorkspaceBody).toEqual(unknownBody);
 });
 
-test('a suspended workspace 404 for a guide matches an unknown workspace', async () => {
-  const app = await newApp();
-  const ws = await workspace(app);
-  const guide = await compiledGuide(ws, 'Some guide');
-  await prisma.organization.update({ where: { id: ws.organizationId }, data: { suspendedAt: new Date() } });
-
-  const suspendedBody = await errorBody(await getGuide(app, ws.workspaceSlug, guide.slug!));
-  const unknownBody = await errorBody(await getGuide(app, 'totally-unknown-workspace', guide.slug!));
-
-  expect(suspendedBody).toEqual(unknownBody);
-});
-
-test('canonical URL is built from the org slug and flow slug when TENANT_BASE_DOMAIN is set', async () => {
-  process.env.TENANT_BASE_DOMAIN = 'example.test';
-  try {
-    const app = await newApp();
-    const ws = await workspace(app);
-    const guide = await compiledGuide(ws, 'Some guide');
-
-    const response = await getCanonical(app, guide.publicId);
-    expect(response.status).toBe(200);
-    expect(response.headers.get('cache-control')).toBe('public, max-age=30');
-    const body = (await response.json()) as { url: string };
-    expect(body.url).toBe(`https://${ws.workspaceSlug}.example.test/g/${guide.slug}`);
-  } finally {
-    delete process.env.TENANT_BASE_DOMAIN;
-  }
-});
-
-test('canonical is 404 when TENANT_BASE_DOMAIN is unset', async () => {
-  delete process.env.TENANT_BASE_DOMAIN;
+test('canonical URL is built from PUBLIC_URL and the flow slug for a published flow', async () => {
   const app = await newApp();
   const ws = await workspace(app);
   const guide = await compiledGuide(ws, 'Some guide');
 
   const response = await getCanonical(app, guide.publicId);
-  expect(response.status).toBe(404);
+  expect(response.status).toBe(200);
+  expect(response.headers.get('cache-control')).toBe('public, max-age=30');
+  const body = (await response.json()) as { url: string };
+  expect(body.url).toBe(`${BASE_URL}/g/${guide.slug}`);
 });
 
-test('canonical is 404 for unlisted, draft, deleted, unslugged or suspended-workspace flows', async () => {
-  process.env.TENANT_BASE_DOMAIN = 'example.test';
-  try {
-    const app = await newApp();
-    const ws = await workspace(app);
+test('canonical is 404 for unlisted, draft, deleted and unknown flows', async () => {
+  const app = await newApp();
+  const ws = await workspace(app);
 
-    const unlisted = await compiledGuide(ws, 'Unlisted guide');
-    await prisma.flow.update({ where: { id: unlisted.id }, data: { visibility: 'unlisted' } });
+  const unlisted = await compiledGuide(ws, 'Unlisted guide');
+  await prisma.flow.update({ where: { id: unlisted.id }, data: { visibility: 'unlisted' } });
 
-    const draft = await compiledGuide(ws, 'Draft guide');
-    await prisma.flow.update({ where: { id: draft.id }, data: { visibility: 'draft' } });
+  const draft = await compiledGuide(ws, 'Draft guide');
+  await prisma.flow.update({ where: { id: draft.id }, data: { visibility: 'draft' } });
 
-    const deleted = await compiledGuide(ws, 'Deleted guide');
-    await prisma.flow.update({ where: { id: deleted.id }, data: { deletedAt: new Date() } });
+  const deleted = await compiledGuide(ws, 'Deleted guide');
+  await prisma.flow.update({ where: { id: deleted.id }, data: { deletedAt: new Date() } });
 
-    const suspendedGuide = await compiledGuide(ws, 'Guide for suspended workspace');
-    await prisma.organization.update({ where: { id: ws.organizationId }, data: { suspendedAt: new Date() } });
+  const unlistedResponse = await getCanonical(app, unlisted.publicId);
+  const draftResponse = await getCanonical(app, draft.publicId);
+  const deletedResponse = await getCanonical(app, deleted.publicId);
+  const unknownResponse = await getCanonical(app, 'totally-unknown-public-id');
 
-    const unlistedResponse = await getCanonical(app, unlisted.publicId);
-    const draftResponse = await getCanonical(app, draft.publicId);
-    const deletedResponse = await getCanonical(app, deleted.publicId);
-    const suspendedResponse = await getCanonical(app, suspendedGuide.publicId);
-    const unknownResponse = await getCanonical(app, 'totally-unknown-public-id');
-
-    expect(unlistedResponse.status).toBe(404);
-    expect(draftResponse.status).toBe(404);
-    expect(deletedResponse.status).toBe(404);
-    expect(suspendedResponse.status).toBe(404);
-    expect(unknownResponse.status).toBe(404);
-    expect(await errorBody(unlistedResponse)).toEqual(await errorBody(unknownResponse));
-  } finally {
-    delete process.env.TENANT_BASE_DOMAIN;
-  }
+  expect(unlistedResponse.status).toBe(404);
+  expect(draftResponse.status).toBe(404);
+  expect(deletedResponse.status).toBe(404);
+  expect(unknownResponse.status).toBe(404);
+  expect(await errorBody(unlistedResponse)).toEqual(await errorBody(unknownResponse));
 });
 
 test('prev/next neighbours are correct and null at the ends', async () => {
@@ -659,21 +556,21 @@ test('prev/next neighbours are correct and null at the ends', async () => {
   await new Promise((resolve) => setTimeout(resolve, 5));
   const newest = await compiledGuide(ws, 'Newest guide');
 
-  const middleBody = (await (await getGuide(app, ws.workspaceSlug, middle.slug!)).json()) as {
+  const middleBody = (await (await getGuide(app, middle.slug!)).json()) as {
     prev: { slug: string } | null;
     next: { slug: string } | null;
   };
   expect(middleBody.prev?.slug).toBe(newest.slug!);
   expect(middleBody.next?.slug).toBe(oldest.slug!);
 
-  const newestBody = (await (await getGuide(app, ws.workspaceSlug, newest.slug!)).json()) as {
+  const newestBody = (await (await getGuide(app, newest.slug!)).json()) as {
     prev: unknown;
     next: { slug: string } | null;
   };
   expect(newestBody.prev).toBeNull();
   expect(newestBody.next?.slug).toBe(middle.slug!);
 
-  const oldestBody = (await (await getGuide(app, ws.workspaceSlug, oldest.slug!)).json()) as {
+  const oldestBody = (await (await getGuide(app, oldest.slug!)).json()) as {
     prev: { slug: string } | null;
     next: unknown;
   };
@@ -703,7 +600,7 @@ test('categories route lists only active categories with listed-guide counts, om
   await prisma.flow.update({ where: { id: guide2.id }, data: { categoryId: activeCategory.id } });
   await prisma.flow.update({ where: { id: guide3.id }, data: { categoryId: suggestedCategory.id } });
 
-  const response = await getCategories(app, ws.workspaceSlug);
+  const response = await getCategories(app);
   expect(response.status).toBe(200);
   expect(response.headers.get('cache-control')).toBe('public, max-age=30');
 
@@ -734,7 +631,7 @@ test('guides list with category filter returns only that category\'s guides', as
   await prisma.flow.update({ where: { id: guide1.id }, data: { categoryId: category.id } });
   await prisma.flow.update({ where: { id: guide2.id }, data: { categoryId: category.id } });
 
-  const response = await listGuides(app, ws.workspaceSlug, `?category=${encodeURIComponent(category.slug)}`);
+  const response = await listGuides(app, `?category=${encodeURIComponent(category.slug)}`);
   expect(response.status).toBe(200);
 
   const body = (await response.json()) as { guides: Array<{ title: string }> ; total: number };
@@ -752,12 +649,12 @@ test('guides list with unknown or suggested category slug returns empty', async 
     data: { organizationId: ws.organizationId, slug: 'suggested-cat', name: 'Suggested', status: 'suggested' },
   });
 
-  const unknownResponse = await listGuides(app, ws.workspaceSlug, '?category=totally-unknown');
+  const unknownResponse = await listGuides(app, '?category=totally-unknown');
   expect(unknownResponse.status).toBe(200);
   const unknownBody = (await unknownResponse.json()) as { guides: unknown[]; total: number };
   expect(unknownBody).toEqual({ guides: [], total: 0 });
 
-  const suggestedResponse = await listGuides(app, ws.workspaceSlug, `?category=${suggestedCategory.slug}`);
+  const suggestedResponse = await listGuides(app, `?category=${suggestedCategory.slug}`);
   expect(suggestedResponse.status).toBe(200);
   const suggestedBody = (await suggestedResponse.json()) as { guides: unknown[]; total: number };
   expect(suggestedBody).toEqual({ guides: [], total: 0 });
@@ -781,7 +678,7 @@ test('guide items in list carry category info, null for uncategorized or non-act
   await prisma.flow.update({ where: { id: categorized.id }, data: { categoryId: activeCategory.id } });
   await prisma.flow.update({ where: { id: suggestedCategoryGuide.id }, data: { categoryId: suggestedCategory.id } });
 
-  const response = await listGuides(app, ws.workspaceSlug);
+  const response = await listGuides(app);
   const body = (await response.json()) as {
     guides: Array<{ title: string; category: { slug: string; name: string } | null }>;
   };
@@ -813,11 +710,11 @@ test('guide detail JSON carries category info, null for uncategorized or non-act
   await prisma.flow.update({ where: { id: categorized.id }, data: { categoryId: activeCategory.id } });
   await prisma.flow.update({ where: { id: suggestedCategoryGuide.id }, data: { categoryId: suggestedCategory.id } });
 
-  const categorizedResponse = await getGuide(app, ws.workspaceSlug, categorized.slug!);
+  const categorizedResponse = await getGuide(app, categorized.slug!);
   const categorizedBody = (await categorizedResponse.json()) as { category: { slug: string; name: string } | null };
   expect(categorizedBody.category).toEqual({ slug: activeCategory.slug, name: activeCategory.name });
 
-  const suggestedResponse = await getGuide(app, ws.workspaceSlug, suggestedCategoryGuide.slug!);
+  const suggestedResponse = await getGuide(app, suggestedCategoryGuide.slug!);
   const suggestedBody = (await suggestedResponse.json()) as { category: { slug: string; name: string } | null };
   expect(suggestedBody.category).toBeNull();
 });
@@ -841,12 +738,12 @@ test('search with category filter returns only that category\'s matches', async 
   await prisma.flow.update({ where: { id: guide2.id }, data: { categoryId: category2.id } });
   await prisma.flow.update({ where: { id: guide3.id }, data: { categoryId: category1.id } });
 
-  const allResults = (await (await search(app, ws.workspaceSlug, 'template')).json()) as {
+  const allResults = (await (await search(app, 'template')).json()) as {
     results: Array<{ slug: string }>;
   };
   expect(allResults.results).toHaveLength(3);
 
-  const filtered = (await (await search(app, ws.workspaceSlug, 'template', category1.slug)).json()) as {
+  const filtered = (await (await search(app, 'template', category1.slug)).json()) as {
     results: Array<{ slug: string }>;
   };
   expect(filtered.results).toHaveLength(2);
@@ -872,7 +769,7 @@ test('search returns counts for all active categories matching the query, regard
   await prisma.flow.update({ where: { id: guide1.id }, data: { categoryId: category1.id } });
   await prisma.flow.update({ where: { id: guide2.id }, data: { categoryId: category2.id } });
 
-  const response = (await (await search(app, ws.workspaceSlug, 'template')).json()) as {
+  const response = (await (await search(app, 'template')).json()) as {
     results: Array<{ slug: string }>;
     counts: Array<{ slug: string; name: string; count: number }>;
   };
@@ -900,7 +797,7 @@ test('search results carry category info', async () => {
   await prisma.flow.update({ where: { id: categorized.id }, data: { categoryId: activeCategory.id } });
   await prisma.flow.update({ where: { id: suggestedCat.id }, data: { categoryId: suggestedCategory.id } });
 
-  const response = (await (await search(app, ws.workspaceSlug, 'template')).json()) as {
+  const response = (await (await search(app, 'template')).json()) as {
     results: Array<{ title: string; category: { slug: string; name: string } | null; steps: number; snippet: string }>;
   };
 
@@ -929,7 +826,7 @@ test('guide in suggested category is not included in category counts', async () 
 
   await prisma.flow.update({ where: { id: guide.id }, data: { categoryId: suggestedCategory.id } });
 
-  const response = (await (await search(app, ws.workspaceSlug, 'template')).json()) as { counts: unknown[] };
+  const response = (await (await search(app, 'template')).json()) as { counts: unknown[] };
   expect(response.counts).toEqual([]);
 });
 
@@ -949,7 +846,7 @@ test('unlisted and draft guides never add to category counts', async () => {
   await prisma.flow.update({ where: { id: unlisted.id }, data: { categoryId: category.id, visibility: 'unlisted' } });
   await prisma.flow.update({ where: { id: draft.id }, data: { categoryId: category.id, visibility: 'draft' } });
 
-  const response = (await (await search(app, ws.workspaceSlug, 'template')).json()) as {
+  const response = (await (await search(app, 'template')).json()) as {
     counts: Array<{ count: number }>;
   };
 
@@ -984,13 +881,13 @@ test('hidden steps do not appear on public guide reader route and do not count i
   });
 
   // 1. Guides list reports 2 steps (omits hidden step)
-  const listRes = await listGuides(app, ws.workspaceSlug);
+  const listRes = await listGuides(app);
   const listBody = (await listRes.json()) as { guides: Array<{ slug: string; steps: number }> };
   const guideItem = listBody.guides.find((g) => g.slug === guide.slug);
   expect(guideItem?.steps).toBe(2);
 
   // 2. Guide detail on public site returns only the 2 visible steps, renumbered 1 and 2
-  const guideRes = await getGuide(app, ws.workspaceSlug, guide.slug!);
+  const guideRes = await getGuide(app, guide.slug!);
   expect(guideRes.status).toBe(200);
   const guideBody = (await guideRes.json()) as {
     steps: Array<{ order: number; title?: string; instruction: string }>;
@@ -1010,7 +907,7 @@ test('hidden steps do not appear on public guide reader route and do not count i
     data: { summary: null },
   });
 
-  const listRes2 = await listGuides(app, ws.workspaceSlug);
+  const listRes2 = await listGuides(app);
   const listBody2 = (await listRes2.json()) as { guides: Array<{ slug: string; steps: number; summary: string }> };
   const guideItem2 = listBody2.guides.find((g) => g.slug === guide.slug);
   expect(guideItem2?.steps).toBe(1);

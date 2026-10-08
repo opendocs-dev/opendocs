@@ -1,5 +1,13 @@
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
-import { BASE_URL, cleanDatabase, GITHUB_ACCOUNT, realFetch, signIn, type App } from '../../test/helpers';
+import {
+  BASE_URL,
+  cleanDatabase,
+  GITHUB_ACCOUNT,
+  OTHER_GITHUB_ACCOUNT,
+  realFetch,
+  signIn,
+  type App,
+} from '../../test/helpers';
 import { getPrisma } from '../db';
 import { createApp } from '../index';
 import { _resetLastActiveCacheForTest, touchMemberLastActive } from '../site/session';
@@ -32,32 +40,21 @@ afterAll(async () => {
   await cleanDatabase();
 });
 
-test('GET /api/v1/members as owner lists members and pending invites', async () => {
+test('GET /api/v1/members as owner lists members only, with no invitations', async () => {
   const ws = await workspace(newApp());
-
-  await prisma.invitation.create({
-    data: {
-      id: 'inv_1',
-      organizationId: ws.organizationId,
-      email: 'pending@example.com',
-      role: 'editor',
-      expiresAt: new Date(Date.now() + 86400000),
-      inviterId: (await prisma.member.findFirstOrThrow({ where: { organizationId: ws.organizationId } })).userId,
-    },
-  });
+  await signIn(ws.app, OTHER_GITHUB_ACCOUNT);
 
   const response = await get(ws.app, '/api/v1/members', ws.cookie);
   expect(response.status).toBe(200);
 
   const body = (await response.json()) as {
     members: Array<{ role: string; email: string }>;
-    invitations: Array<{ email: string; role: string }>;
+    invitations?: unknown;
   };
-  expect(body.members).toHaveLength(1);
-  expect(body.members[0].role).toBe('owner');
-  expect(body.invitations).toHaveLength(1);
-  expect(body.invitations[0].email).toBe('pending@example.com');
-  expect(body.invitations[0].role).toBe('editor');
+  expect(Object.keys(body)).toEqual(['members']);
+  expect(body.members).toHaveLength(2);
+  expect(body.members.map((m) => m.role).sort()).toEqual(['editor', 'owner']);
+  expect(body.members.find((m) => m.email === OTHER_GITHUB_ACCOUNT.email)?.role).toBe('editor');
 });
 
 test('GET /api/v1/members includes last_active_at and touchMemberLastActive updates it at most once per hour', async () => {
@@ -119,74 +116,29 @@ test('GET /api/v1/members requires a session', async () => {
   expect(response.status).toBe(401);
 });
 
-test('POST /api/auth/organization/update-member-role blocks demoting the sole owner', async () => {
-  const ws = await workspace(newApp());
-  const owner = await prisma.member.findFirstOrThrow({ where: { organizationId: ws.organizationId } });
+const refusedOrganizationEndpoints: Array<[string, (ws: { organizationId: string; ownerId: string }) => unknown]> = [
+  ['update-member-role', (ws) => ({ memberId: ws.ownerId, role: 'editor', organizationId: ws.organizationId })],
+  ['remove-member', (ws) => ({ memberIdOrEmail: ws.ownerId, organizationId: ws.organizationId })],
+  ['leave', (ws) => ({ organizationId: ws.organizationId })],
+  ['invite-member', (ws) => ({ email: 'new-hire@example.com', role: 'editor', organizationId: ws.organizationId })],
+];
 
-  const response = await ws.app.handle(
-    new Request(`${BASE_URL}/api/auth/organization/update-member-role`, {
-      method: 'POST',
-      headers: { cookie: ws.cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ memberId: owner.id, role: 'editor', organizationId: ws.organizationId }),
-    }),
-  );
+for (const [endpoint, makeBody] of refusedOrganizationEndpoints) {
+  test(`POST /api/auth/organization/${endpoint} is refused with 404 and changes nothing`, async () => {
+    const ws = await workspace(newApp());
+    const owner = await prisma.member.findFirstOrThrow({ where: { organizationId: ws.organizationId } });
 
-  expect(response.status).toBe(400);
-  const stillOwner = await prisma.member.findUniqueOrThrow({ where: { id: owner.id } });
-  expect(stillOwner.role).toBe('owner');
-});
-
-test('POST /api/auth/organization/remove-member blocks removing the sole owner', async () => {
-  const ws = await workspace(newApp());
-  const owner = await prisma.member.findFirstOrThrow({ where: { organizationId: ws.organizationId } });
-
-  const response = await ws.app.handle(
-    new Request(`${BASE_URL}/api/auth/organization/remove-member`, {
-      method: 'POST',
-      headers: { cookie: ws.cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ memberIdOrEmail: owner.id, organizationId: ws.organizationId }),
-    }),
-  );
-
-  expect(response.status).toBe(400);
-  const stillThere = await prisma.member.findUnique({ where: { id: owner.id } });
-  expect(stillThere).not.toBeNull();
-});
-
-test('POST /api/auth/organization/leave blocks the sole owner from leaving', async () => {
-  const ws = await workspace(newApp());
-  const owner = await prisma.member.findFirstOrThrow({ where: { organizationId: ws.organizationId } });
-
-  const response = await ws.app.handle(
-    new Request(`${BASE_URL}/api/auth/organization/leave`, {
-      method: 'POST',
-      headers: { cookie: ws.cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ organizationId: ws.organizationId }),
-    }),
-  );
-
-  expect(response.status).toBe(400);
-  const stillThere = await prisma.member.findUnique({ where: { id: owner.id } });
-  expect(stillThere).not.toBeNull();
-});
-
-test('POST /api/auth/organization/invite-member as editor is forbidden (menu hiding is not security)', async () => {
-  const ws = await workspace(newApp());
-  await prisma.member.updateMany({ where: { organizationId: ws.organizationId }, data: { role: 'editor' } });
-
-  const response = await ws.app.handle(
-    new Request(`${BASE_URL}/api/auth/organization/invite-member`, {
-      method: 'POST',
-      headers: { cookie: ws.cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        email: 'new-hire@example.com',
-        role: 'editor',
-        organizationId: ws.organizationId,
+    const response = await ws.app.handle(
+      new Request(`${BASE_URL}/api/auth/organization/${endpoint}`, {
+        method: 'POST',
+        headers: { cookie: ws.cookie, 'content-type': 'application/json' },
+        body: JSON.stringify(makeBody({ organizationId: ws.organizationId, ownerId: owner.id })),
       }),
-    }),
-  );
+    );
 
-  expect(response.status).toBe(403);
-  const invitation = await prisma.invitation.findFirst({ where: { organizationId: ws.organizationId } });
-  expect(invitation).toBeNull();
-});
+    expect(response.status).toBe(404);
+    const stillOwner = await prisma.member.findUniqueOrThrow({ where: { id: owner.id } });
+    expect(stillOwner.role).toBe('owner');
+    expect(await prisma.member.count()).toBe(1);
+  });
+}

@@ -2,6 +2,7 @@ import { Elysia } from 'elysia';
 import { auth } from '../auth';
 import { errorResponse } from '../errors';
 import { roleFor } from './role';
+import { getInstanceOrg } from '../instance-org';
 
 const KEY_PATHS = new Set([
   '/api/auth/api-key/create',
@@ -24,7 +25,7 @@ export const keyGuard = new Elysia()
 
     // Load the session
     const session = await auth.api.getSession({ headers: request.headers });
-    const organizationId = session?.session.activeOrganizationId;
+    const organizationId = session ? (await getInstanceOrg()).id : undefined;
 
     // Check for valid session and organization
     if (!session || !organizationId) {

@@ -32,18 +32,12 @@ test('GET /api/v1/account returns profile, handle, and defaults notifications on
     image: string | null;
     email_notifications: boolean;
     notify_weekly_digest: boolean;
-    notify_ai_credits: boolean;
-    notify_content_gaps: boolean;
-    notify_invite_accepted: boolean;
     github_handle: string | null;
   };
   expect(body.name).toBe(GITHUB_ACCOUNT.name);
   expect(body.email).toBe(GITHUB_ACCOUNT.email!);
   expect(body.email_notifications).toBe(true);
   expect(body.notify_weekly_digest).toBe(true);
-  expect(body.notify_ai_credits).toBe(true);
-  expect(body.notify_content_gaps).toBe(true);
-  expect(body.notify_invite_accepted).toBe(true);
   expect(body.github_handle).toBe(GITHUB_ACCOUNT.login);
 });
 
@@ -97,7 +91,7 @@ test('PATCH /api/v1/account rejects invalid name length', async () => {
   expect(resLong.status).toBe(422);
 });
 
-test('PATCH /api/v1/account updates individual notification toggles', async () => {
+test('PATCH /api/v1/account updates the weekly digest toggle and keeps email_notifications in sync', async () => {
   const app = newApp();
   const cookie = await signIn(app, GITHUB_ACCOUNT);
 
@@ -105,31 +99,23 @@ test('PATCH /api/v1/account updates individual notification toggles', async () =
     new Request(`${BASE_URL}/api/v1/account`, {
       method: 'PATCH',
       headers: { cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ notify_weekly_digest: false, notify_ai_credits: false }),
+      body: JSON.stringify({ notify_weekly_digest: false }),
     }),
   );
   expect(response.status).toBe(200);
   const body = (await response.json()) as {
     notify_weekly_digest: boolean;
-    notify_ai_credits: boolean;
-    notify_content_gaps: boolean;
-    notify_invite_accepted: boolean;
     email_notifications: boolean;
   };
   expect(body.notify_weekly_digest).toBe(false);
-  expect(body.notify_ai_credits).toBe(false);
-  expect(body.notify_content_gaps).toBe(true);
-  expect(body.notify_invite_accepted).toBe(true);
-  expect(body.email_notifications).toBe(true); // Derived: other 2 are still true
+  expect(body.email_notifications).toBe(false); // Kept in sync with the weekly digest
 
   const user = await prisma.user.findFirstOrThrow({ where: { email: GITHUB_ACCOUNT.email! } });
   expect(user.notifyWeeklyDigest).toBe(false);
-  expect(user.notifyAiCredits).toBe(false);
-  expect(user.notifyContentGaps).toBe(true);
-  expect(user.emailNotifications).toBe(true);
+  expect(user.emailNotifications).toBe(false);
 });
 
-test('PATCH /api/v1/account legacy email_notifications syncs all toggles', async () => {
+test('PATCH /api/v1/account legacy email_notifications syncs the weekly digest', async () => {
   const app = newApp();
   const cookie = await signIn(app, GITHUB_ACCOUNT);
 
@@ -144,15 +130,9 @@ test('PATCH /api/v1/account legacy email_notifications syncs all toggles', async
   const body = (await response.json()) as {
     email_notifications: boolean;
     notify_weekly_digest: boolean;
-    notify_ai_credits: boolean;
-    notify_content_gaps: boolean;
-    notify_invite_accepted: boolean;
   };
   expect(body.email_notifications).toBe(false);
   expect(body.notify_weekly_digest).toBe(false);
-  expect(body.notify_ai_credits).toBe(false);
-  expect(body.notify_content_gaps).toBe(false);
-  expect(body.notify_invite_accepted).toBe(false);
 
   const user = await prisma.user.findFirstOrThrow({ where: { email: GITHUB_ACCOUNT.email! } });
   expect(user.emailNotifications).toBe(false);

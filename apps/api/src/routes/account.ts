@@ -25,8 +25,8 @@ const readJsonBody = async (request: Request): Promise<Record<string, unknown>> 
 /**
  * Account settings for the signed-in person (C14-AC25, UI-A15): profile name is editable
  * (1-80 chars), photo and email come from GitHub and remain read-only.
- * Email notification preferences offer four toggles matching the mock, with legacy
- * `email_notifications` supported as a derived / synced boolean.
+ * The weekly-digest preference is synced with the legacy
+ * `email_notifications` boolean.
  */
 export const accountRoute = new Elysia()
   .get('/api/v1/account', async ({ request }) => {
@@ -42,9 +42,6 @@ export const accountRoute = new Elysia()
           image: true,
           emailNotifications: true,
           notifyWeeklyDigest: true,
-          notifyAiCredits: true,
-          notifyContentGaps: true,
-          notifyInviteAccepted: true,
         },
       }),
       prisma.account.findFirst({
@@ -59,9 +56,6 @@ export const accountRoute = new Elysia()
       image: user.image,
       email_notifications: user.emailNotifications,
       notify_weekly_digest: user.notifyWeeklyDigest,
-      notify_ai_credits: user.notifyAiCredits,
-      notify_content_gaps: user.notifyContentGaps,
-      notify_invite_accepted: user.notifyInviteAccepted,
       github_handle: account?.username ?? null,
     };
   })
@@ -74,9 +68,6 @@ export const accountRoute = new Elysia()
       name?: string;
       emailNotifications?: boolean;
       notifyWeeklyDigest?: boolean;
-      notifyAiCredits?: boolean;
-      notifyContentGaps?: boolean;
-      notifyInviteAccepted?: boolean;
     } = {};
 
     let hasUpdate = false;
@@ -96,17 +87,11 @@ export const accountRoute = new Elysia()
       const val = body.email_notifications;
       updateData.emailNotifications = val;
       updateData.notifyWeeklyDigest = val;
-      updateData.notifyAiCredits = val;
-      updateData.notifyContentGaps = val;
-      updateData.notifyInviteAccepted = val;
       hasUpdate = true;
     } else {
       let togglesChanged = false;
       for (const [key, field] of [
         ['notify_weekly_digest', 'notifyWeeklyDigest'],
-        ['notify_ai_credits', 'notifyAiCredits'],
-        ['notify_content_gaps', 'notifyContentGaps'],
-        ['notify_invite_accepted', 'notifyInviteAccepted'],
       ] as const) {
         if (body[key] !== undefined) {
           if (typeof body[key] !== 'boolean') {
@@ -123,16 +108,9 @@ export const accountRoute = new Elysia()
           where: { id: userId },
           select: {
             notifyWeeklyDigest: true,
-            notifyAiCredits: true,
-            notifyContentGaps: true,
-            notifyInviteAccepted: true,
           },
         });
-        const w = updateData.notifyWeeklyDigest ?? current.notifyWeeklyDigest;
-        const a = updateData.notifyAiCredits ?? current.notifyAiCredits;
-        const c = updateData.notifyContentGaps ?? current.notifyContentGaps;
-        const i = updateData.notifyInviteAccepted ?? current.notifyInviteAccepted;
-        updateData.emailNotifications = w || a || c || i;
+        updateData.emailNotifications = updateData.notifyWeeklyDigest ?? current.notifyWeeklyDigest;
       }
     }
 
@@ -150,9 +128,6 @@ export const accountRoute = new Elysia()
           image: true,
           emailNotifications: true,
           notifyWeeklyDigest: true,
-          notifyAiCredits: true,
-          notifyContentGaps: true,
-          notifyInviteAccepted: true,
         },
       }),
       prisma.account.findFirst({
@@ -167,9 +142,6 @@ export const accountRoute = new Elysia()
       image: user.image,
       email_notifications: user.emailNotifications,
       notify_weekly_digest: user.notifyWeeklyDigest,
-      notify_ai_credits: user.notifyAiCredits,
-      notify_content_gaps: user.notifyContentGaps,
-      notify_invite_accepted: user.notifyInviteAccepted,
       github_handle: account?.username ?? null,
     };
   });

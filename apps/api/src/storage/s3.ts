@@ -1,7 +1,6 @@
 import { S3Client } from 'bun';
-import type { Storage, StorageProvider } from './provider';
-
-const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+import type { Env } from '../env';
+import type { Storage } from './provider';
 
 /** Structural subset of Bun's S3Client, so tests can inject a fake. */
 export type S3Like = {
@@ -10,7 +9,10 @@ export type S3Like = {
     arrayBuffer(): Promise<ArrayBuffer>;
   };
   delete(key: string): Promise<void>;
+  list(options: { maxKeys: number }): Promise<unknown>;
 };
+
+const SAFE_FILE_ID = /^[A-Za-z0-9._-]+$/;
 
 const isNotFound = (error: unknown): boolean => {
   if (!error || typeof error !== 'object') return false;
@@ -20,76 +22,52 @@ const isNotFound = (error: unknown): boolean => {
   return /NoSuchKey|404/.test(text);
 };
 
-export class S3Provider implements StorageProvider {
-  readonly name = 's3';
+export class S3Storage implements Storage {
+  constructor(
+    private readonly client: S3Like,
+    /** Already normalised: empty, or ends with "/". */
+    private readonly prefix = '',
+  ) {}
 
-  constructor(private readonly clientFor: (bucket: string) => S3Like) {}
-
-  private segment(value: string): string {
-    if (!SAFE_SEGMENT.test(value)) throw new Error(`Unsafe storage path segment: ${value}`);
-    return value;
+  private key(fileId: string): string {
+    // Defense in depth: file ids are ours (a uuid), never user input.
+    if (!SAFE_FILE_ID.test(fileId)) throw new Error(`Unsafe storage file id: ${fileId}`);
+    return `${this.prefix}${fileId}`;
   }
 
-  async upload(
-    account: string,
-    _key: string,
-    bytes: Uint8Array,
-    mime: string,
-  ): Promise<{ fileId: string }> {
-    const bucket = this.segment(account);
+  async upload(bytes: Uint8Array, mime: string): Promise<{ fileId: string }> {
     const fileId = crypto.randomUUID();
-    const client = this.clientFor(bucket);
-    await client.file(this.segment(fileId)).write(bytes, { type: mime });
+    await this.client.file(this.key(fileId)).write(bytes, { type: mime });
     return { fileId };
   }
 
-  async read(account: string, fileId: string): Promise<Uint8Array> {
-    const bucket = this.segment(account);
-    const client = this.clientFor(bucket);
-    return new Uint8Array(await client.file(this.segment(fileId)).arrayBuffer());
+  async read(fileId: string): Promise<Uint8Array> {
+    return new Uint8Array(await this.client.file(this.key(fileId)).arrayBuffer());
   }
 
-  async delete(account: string, fileId: string): Promise<void> {
-    const bucket = this.segment(account);
-    const client = this.clientFor(bucket);
+  async delete(fileId: string): Promise<void> {
     try {
-      await client.delete(this.segment(fileId));
+      await this.client.delete(this.key(fileId));
     } catch (error) {
       if (isNotFound(error)) return;
       throw error;
     }
   }
+
+  async check(): Promise<void> {
+    await this.client.list({ maxKeys: 1 });
+  }
 }
 
-type EnvVars = Record<string, string | undefined>;
+/** Bun S3Client options for the configured bucket; `S3_FORCE_PATH_STYLE=false` means virtual-hosted style. */
+export const s3ClientOptions = (s3: Env['s3']) => ({
+  accessKeyId: s3.accessKeyId,
+  secretAccessKey: s3.secretAccessKey,
+  endpoint: s3.endpoint,
+  region: s3.region,
+  bucket: s3.bucket,
+  virtualHostedStyle: !s3.forcePathStyle,
+});
 
-const required = (env: EnvVars, name: string): string => {
-  const value = env[name];
-  if (!value) throw new Error(`${name} is not set`);
-  return value;
-};
-
-export const createS3Storage = (env: EnvVars): Storage => {
-  const accessKeyId = required(env, 'S3_ACCESS_KEY_ID');
-  const secretAccessKey = required(env, 'S3_SECRET_ACCESS_KEY');
-  const bucketsRaw = required(env, 'S3_BUCKETS');
-  const accounts = bucketsRaw
-    .split(',')
-    .map((bucket) => bucket.trim())
-    .filter((bucket) => bucket.length > 0);
-  if (accounts.length === 0) throw new Error('S3_BUCKETS is not set');
-
-  const endpoint = env.S3_ENDPOINT || undefined;
-  const region = env.S3_REGION || 'auto';
-
-  const clients = new Map<string, S3Like>();
-  const clientFor = (bucket: string): S3Like => {
-    const existing = clients.get(bucket);
-    if (existing) return existing;
-    const client = new S3Client({ accessKeyId, secretAccessKey, endpoint, region, bucket });
-    clients.set(bucket, client);
-    return client;
-  };
-
-  return { provider: new S3Provider(clientFor), accounts };
-};
+export const createS3Storage = (env: Pick<Env, 's3'>, client?: S3Like): Storage =>
+  new S3Storage(client ?? new S3Client(s3ClientOptions(env.s3)), env.s3.prefix);

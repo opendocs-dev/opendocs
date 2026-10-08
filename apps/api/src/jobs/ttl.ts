@@ -1,5 +1,5 @@
 import { getPrisma } from '../db';
-import { resolveStorageProvider, type Storage } from '../storage/provider';
+import { getStorage, type Storage } from '../storage/provider';
 
 /**
  * Fixed key for the sweep's advisory lock: one sweep at a time across every process
@@ -30,7 +30,7 @@ const isNotFoundError = (error: unknown): boolean => {
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
- * Deletes provider bytes for every expired, not-yet-deleted asset and marks each row
+ * Deletes the stored objects for every expired, not-yet-deleted asset and marks each row
  * `deletedAt`. Runs inside one interactive transaction guarded by a Postgres advisory
  * lock, so only one sweep (across every API process) runs at a time; a second sweep
  * that finds the lock held returns immediately instead of racing the first.
@@ -69,18 +69,14 @@ export const sweepExpiredAssets = async ({
           where: { expiresAt: { lte: now }, deletedAt: null, id: { notIn: failedIds } },
           orderBy: { createdAt: 'asc' },
           take: batch,
-          select: { id: true, publicId: true, provider: true, providerAccount: true, providerFileId: true },
+          select: { id: true, publicId: true, providerFileId: true },
         });
         if (assets.length === 0) break;
 
         for (const asset of assets) {
           if (Date.now() >= deadline) break;
           try {
-            // A test-injected storage override always wins (it is simulating a specific
-            // provider); otherwise each asset's own recorded provider decides, since a
-            // deployment can hold assets from more than one provider over time.
-            const provider = storage ? storage.provider : resolveStorageProvider(asset.provider);
-            await provider.delete(asset.providerAccount, asset.providerFileId);
+            await (storage ?? getStorage()).delete(asset.providerFileId);
           } catch (error) {
             if (!isNotFoundError(error)) {
               failedIds.push(asset.id);

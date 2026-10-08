@@ -1,24 +1,11 @@
-import { DAILY_QUOTAS, FREE_STORAGE_BYTES, GLOBAL_BREAKER_ALERT_BYTES, GLOBAL_BREAKER_BYTES } from './legacy-limits';
 import { getPrisma } from './db';
+import { getEnv, getLimits } from './env';
 import { ApiError } from './errors';
-import { getPlan } from './plan';
 
 const quotaExceeded = (message: string) => new ApiError(429, 'quota_exceeded', message);
-const breakerOpen = () =>
-  new ApiError(429, 'breaker_open', 'Global upload breaker is open for today');
-const storageQuotaExceeded = () =>
-  new ApiError(
-    403,
-    'storage_quota_exceeded',
-    'Free storage is full (100 MiB): delete a doc or upgrade.',
-  );
 
 export const startOfUtcDay = (now: Date): Date =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-
-/** A single non-negative integer, matching the header shape `readBody` also accepts. */
-const parseContentLength = (header: string | null): number | null =>
-  header !== null && /^\d+$/.test(header) ? Number(header) : null;
 
 /** In-flight uploads per workspace. Valid at one API replica; see the note on `acquireSlot`. */
 const inFlight = new Map<string, number>();
@@ -43,57 +30,20 @@ export const releaseSlot = (organizationId: string): void => {
   else inFlight.set(organizationId, current - 1);
 };
 
-/**
- * Global breaker first, then the workspace's own daily file/byte quota. Runs before the
- * body is read, so a request over quota never streams, decodes, or stores anything.
- */
-export const checkQuota = async (params: {
-  organizationId: string;
-  contentLengthHeader: string | null;
-  now: Date;
-}): Promise<void> => {
-  const { organizationId, contentLengthHeader, now } = params;
-  const prisma = getPrisma();
-  const day = startOfUtcDay(now);
-
-  const globalUsage = await prisma.usageDaily.aggregate({
-    where: { day },
-    _sum: { bytes: true },
-  });
-  const globalBytes = globalUsage._sum.bytes ?? 0n;
-  if (globalBytes >= BigInt(GLOBAL_BREAKER_BYTES)) throw breakerOpen();
-
-  const plan = await getPlan(organizationId);
-  const limit = DAILY_QUOTAS[plan];
-
-  const usage = await prisma.usageDaily.findUnique({
-    where: { organizationId_day: { organizationId, day } },
-  });
-  const files = usage?.files ?? 0;
-  const bytes = usage?.bytes ?? 0n;
-
-  // ponytail: read-then-upload is not locked, so up to 4 concurrent uploads (the
-  // concurrency cap) can pass on the same count: a workspace may exceed its daily quota
-  // by at most 3 files / 4 uploads. Lock the UsageDaily row if that ever matters.
-  if (files >= limit.files) throw quotaExceeded('daily file quota reached');
-  // Without a content-length (chunked upload) the size is unknown up front, so a
-  // workspace already at its byte limit is refused outright.
-  if (bytes >= BigInt(limit.bytes)) throw quotaExceeded('daily byte quota reached');
-
-  const contentLength = parseContentLength(contentLengthHeader);
-  if (contentLength !== null && bytes + BigInt(contentLength) > BigInt(limit.bytes)) {
-    throw quotaExceeded('daily byte quota reached');
+/** Steps already recorded in a run: the next one is refused once it reaches `MAX_STEPS_PER_RUN`. */
+export const checkStepLimit = (stepCount: number): void => {
+  const { maxStepsPerRun } = getLimits();
+  if (stepCount >= maxStepsPerRun) {
+    throw new ApiError(422, 'step_limit', `A run is limited to ${maxStepsPerRun} steps`);
   }
 };
 
 /**
- * Free workspaces are capped by total live storage rather than a daily quota. Only
- * `kind: 'step'` assets count: snaps are short-lived and excluded regardless of plan,
- * and non-free plans have no storage cap.
+ * Optional workspace cap on total live step-image bytes (`STORAGE_QUOTA_BYTES`, 0 = no
+ * cap). Only `kind: 'step'` assets count: snaps are short-lived.
  *
- * ponytail: the sum-then-upload check below is not locked, so up to 4 concurrent
- * uploads (the concurrency cap) can pass on the same sum: a Free workspace may
- * overshoot the 100 MiB cap slightly. Add a lock if that ever matters.
+ * ponytail: the sum-then-upload check is not locked, so up to 4 concurrent uploads (the
+ * concurrency cap) can pass on the same sum and overshoot the cap slightly.
  */
 export const checkStorageQuota = async (params: {
   organizationId: string;
@@ -101,8 +51,8 @@ export const checkStorageQuota = async (params: {
   now: Date;
 }): Promise<void> => {
   const { organizationId, incomingBytes, now } = params;
-  const plan = await getPlan(organizationId);
-  if (plan !== 'free') return;
+  const { storageQuotaBytes } = getLimits();
+  if (storageQuotaBytes === 0) return;
 
   const usage = await getPrisma().asset.aggregate({
     where: {
@@ -115,65 +65,44 @@ export const checkStorageQuota = async (params: {
   });
   const liveBytes = usage._sum.bytes ?? 0;
 
-  if (liveBytes + incomingBytes > FREE_STORAGE_BYTES) throw storageQuotaExceeded();
+  if (liveBytes + incomingBytes > storageQuotaBytes) {
+    throw new ApiError(
+      403,
+      'storage_quota_exceeded',
+      `Storage is full (${storageQuotaBytes} bytes): delete a doc to free space.`,
+    );
+  }
 };
 
 /** One process-lifetime alert per UTC day, keyed by the day's ISO date string. */
 const alertedDays = new Set<string>();
 
 /**
- * Re-checks the global sum after a successful upload and sends at most one Telegram
- * alert per UTC day the first time the sum crosses the 80% threshold. The alert
- * fetch is deliberately not awaited: a slow or failing Telegram call must never
- * delay or fail the upload that triggered it.
+ * Sends at most one Telegram message per UTC day when an upload is refused for the
+ * storage cap, if `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set. Never awaited on
+ * the response path: a slow or failing Telegram call must not delay or fail a request.
  */
-export const maybeSendBreakerAlert = async (params: {
-  now: Date;
-  fetchImpl?: typeof fetch;
-}): Promise<void> => {
+export const maybeSendQuotaAlert = (params: { now: Date; fetchImpl?: typeof fetch }): void => {
   const { now, fetchImpl = fetch } = params;
-  const day = startOfUtcDay(now);
-  const dayKey = day.toISOString();
+  const telegram = getEnv().telegram;
+  if (!telegram) return;
+
+  const dayKey = startOfUtcDay(now).toISOString();
   if (alertedDays.has(dayKey)) return;
-  // Claim the day before any await, so two uploads crossing the threshold together
-  // cannot both send; released again if the sum turns out to be under it.
   alertedDays.add(dayKey);
-
-  const prisma = getPrisma();
-  const globalUsage = await prisma.usageDaily.aggregate({
-    where: { day },
-    _sum: { bytes: true },
-  });
-  const globalBytes = globalUsage._sum.bytes ?? 0n;
-  if (globalBytes < BigInt(GLOBAL_BREAKER_ALERT_BYTES)) {
-    alertedDays.delete(dayKey);
-    return;
-  }
-
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) {
-    console.log('telegram alert skipped: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set');
-    return;
-  }
-
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  const text = `Global upload breaker crossed 80% of ${GLOBAL_BREAKER_BYTES} bytes for ${dayKey}`;
 
   const logFailure = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     // Never let the bot token reach a log line, even if a runtime error echoes the URL.
-    console.error('telegram alert failed', message.split(token).join('<token>'));
+    console.error('telegram alert failed', message.split(telegram.botToken).join('<token>'));
   };
 
-  // Never awaited on the response path: a throwing or rejecting fetch must not
-  // reach the caller, which is mid-response to a successful upload.
   try {
     Promise.resolve(
-      fetchImpl(url, {
+      fetchImpl(`https://api.telegram.org/bot${telegram.botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text }),
+        body: JSON.stringify({ chat_id: telegram.chatId, text: `Storage quota reached on ${getEnv().siteName} (${dayKey})` }),
       }),
     ).catch(logFailure);
   } catch (error) {

@@ -1,41 +1,34 @@
 import { MAX_BYTES, SNAP_TTL } from '@opendocs/core';
-import { FREE_STORAGE_BYTES } from '../legacy-limits';
 import { AssetUploadResponseSchema } from '@opendocs/core';
 import { Value } from '@sinclair/typebox/value';
-import { mkdtemp, readdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
-import { BASE_URL, cleanDatabase, realFetch, signIn, type App } from '../../test/helpers';
+import { BASE_URL, cleanDatabase, memoryStorage, realFetch, signIn, type App } from '../../test/helpers';
 import { pngOfExactSize, pngWithDimensions, svgBytes, tinyPng, tinyWebp } from '../../test/images';
 import { getPrisma } from '../db';
+import { resetEnvForTest } from '../env';
 import { newPublicId } from '../ids';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
-import { getStorage, type Storage } from '../storage/provider';
 
 const prisma = getPrisma();
 
-/** A fresh temp dir per app keeps stored files isolated from other test files. */
-const localStorage = async (): Promise<Storage & { root: string }> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-assets-'));
-  return { root, provider: new LocalDiskProvider(root), accounts: ['local'] };
-};
+/** A step-image cap used by the storage quota tests (1 GB). */
+const QUOTA_BYTES = 1_000_000_000;
 
-/** Counts every file the provider has actually written, across accounts. */
-const storedFiles = async (root: string): Promise<string[]> => {
-  const accounts = await readdir(root).catch(() => [] as string[]);
-  const names: string[] = [];
-  for (const account of accounts) {
-    names.push(...(await readdir(join(root, account)).catch(() => [] as string[])));
-  }
-  return names;
+const storedFiles = (storage: ReturnType<typeof memoryStorage>): string[] => [...storage.objects.keys()];
+
+const ENV_KEYS = ['ASSET_BASE_URL', 'S3_PREFIX', 'STORAGE_QUOTA_BYTES', 'MAX_UPLOAD_BYTES'] as const;
+const savedEnv = new Map<string, string | undefined>(ENV_KEYS.map((key) => [key, process.env[key]]));
+
+/** Sets env overrides for one test; `afterEach` restores them. */
+const withEnv = (overrides: Partial<Record<(typeof ENV_KEYS)[number], string>>) => {
+  for (const [key, value] of Object.entries(overrides)) process.env[key] = value;
+  resetEnvForTest();
 };
 
 type Upload = {
   app: App;
   cookie: string;
-  root: string;
+  storage: ReturnType<typeof memoryStorage>;
   organizationId: string;
   post: (init: {
     body?: BodyInit | null;
@@ -43,15 +36,11 @@ type Upload = {
   }) => Promise<Response>;
 };
 
-const setup = async (storage?: Storage & { root: string }): Promise<Upload> => {
-  const resolved = storage ?? (await localStorage());
-  const app = createApp(async () => {}, resolved);
+const setup = async (): Promise<Upload> => {
+  const storage = memoryStorage();
+  const app = createApp(async () => {}, storage);
   const cookie = await signIn(app);
-
-  const session = await prisma.session.findFirstOrThrow({
-    where: { activeOrganizationId: { not: null } },
-    orderBy: { createdAt: 'desc' },
-  });
+  const organization = await prisma.organization.findFirstOrThrow();
 
   const post: Upload['post'] = ({ body, headers }) =>
     app.handle(
@@ -62,7 +51,7 @@ const setup = async (storage?: Storage & { root: string }): Promise<Upload> => {
       }),
     );
 
-  return { app, cookie, root: resolved.root, organizationId: session.activeOrganizationId!, post };
+  return { app, cookie, storage, organizationId: organization.id, post };
 };
 
 /** Seeds an existing live step Asset row of exactly `bytes`, without touching storage. */
@@ -72,8 +61,6 @@ const seedStepAsset = (organizationId: string, bytes: number) =>
       publicId: newPublicId(),
       organizationId,
       kind: 'step',
-      provider: 'local',
-      providerAccount: 'local',
       providerFileId: newPublicId(),
       mime: 'image/png',
       bytes,
@@ -90,6 +77,11 @@ beforeEach(async () => {
 
 afterEach(() => {
   globalThis.fetch = realFetch;
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  resetEnvForTest();
 });
 
 afterAll(async () => {
@@ -97,7 +89,7 @@ afterAll(async () => {
 });
 
 test('step upload expires in 7 days', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
   const bytes = tinyPng();
 
   const before = Date.now();
@@ -107,7 +99,7 @@ test('step upload expires in 7 days', async () => {
   const body = (await response.json()) as { id: string; url: string; expires_at: string };
   expect(Value.Check(AssetUploadResponseSchema, body)).toBe(true);
   expect(body.id).toMatch(/^[0-9A-Za-z]{16}$/);
-  expect(body.url).toBe(`${process.env.ASSET_BASE_URL}/i/${body.id}`);
+  expect(body.url).toBe(`${BASE_URL}/api/i/${body.id}`);
 
   // A step image is a draft until its run is compiled: it expires in 7 days.
   const expires = new Date(body.expires_at).getTime();
@@ -120,19 +112,14 @@ test('step upload expires in 7 days', async () => {
   expect(asset.bytes).toBe(bytes.byteLength);
   expect(asset.width).toBe(4);
   expect(asset.height).toBe(4);
-  expect(asset.provider).toBe('local');
-  expect(asset.providerAccount).toBe('local');
   expect(asset.sha256).toHaveLength(64);
 
-  expect(await storedFiles(root)).toEqual([asset.providerFileId]);
-
-  const usage = await prisma.usageDaily.findFirstOrThrow();
-  expect(usage.files).toBe(1);
-  expect(usage.bytes).toBe(BigInt(bytes.byteLength));
+  expect(await storedFiles(storage)).toEqual([asset.providerFileId]);
+  expect(storage.objects.get(asset.providerFileId)).toEqual(bytes);
 });
 
 test('brand upload (favicon/share image) never expires', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
   const bytes = tinyPng();
 
   const response = await post({ body: bytes, headers: { 'x-opendocs-kind': 'brand' } });
@@ -146,7 +133,7 @@ test('brand upload (favicon/share image) never expires', async () => {
   expect(asset.kind).toBe('brand');
   expect(asset.expiresAt).toBeNull();
 
-  expect(await storedFiles(root)).toEqual([asset.providerFileId]);
+  expect(await storedFiles(storage)).toEqual([asset.providerFileId]);
 });
 
 test('snap expires_at follows the ttl header, default 24h', async () => {
@@ -182,8 +169,9 @@ test('snap expires_at follows the ttl header, default 24h', async () => {
 });
 
 test('step upload under quota succeeds', async () => {
+  withEnv({ STORAGE_QUOTA_BYTES: String(QUOTA_BYTES) });
   const { post, organizationId } = await setup();
-  await seedStepAsset(organizationId, FREE_STORAGE_BYTES - 1_000_000);
+  await seedStepAsset(organizationId, QUOTA_BYTES - 1_000_000);
 
   const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
 
@@ -191,8 +179,9 @@ test('step upload under quota succeeds', async () => {
 });
 
 test('over quota returns 403 storage_quota_exceeded and stores nothing', async () => {
-  const { post, root, organizationId } = await setup();
-  await seedStepAsset(organizationId, FREE_STORAGE_BYTES);
+  withEnv({ STORAGE_QUOTA_BYTES: String(QUOTA_BYTES) });
+  const { post, storage, organizationId } = await setup();
+  await seedStepAsset(organizationId, QUOTA_BYTES);
   const before = await prisma.asset.count();
 
   const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
@@ -202,13 +191,14 @@ test('over quota returns 403 storage_quota_exceeded and stores nothing', async (
     'storage_quota_exceeded',
   );
   expect(await prisma.asset.count()).toBe(before);
-  expect(await storedFiles(root)).toEqual([]);
+  expect(await storedFiles(storage)).toEqual([]);
 });
 
 test('exactly at the limit is allowed', async () => {
+  withEnv({ STORAGE_QUOTA_BYTES: String(QUOTA_BYTES) });
   const { post, organizationId } = await setup();
   const bytes = tinyPng();
-  await seedStepAsset(organizationId, FREE_STORAGE_BYTES - bytes.byteLength);
+  await seedStepAsset(organizationId, QUOTA_BYTES - bytes.byteLength);
 
   const response = await post({ body: bytes, headers: { 'x-opendocs-kind': 'step' } });
 
@@ -216,8 +206,9 @@ test('exactly at the limit is allowed', async () => {
 });
 
 test('deleting a doc frees the quota', async () => {
+  withEnv({ STORAGE_QUOTA_BYTES: String(QUOTA_BYTES) });
   const { app, cookie, post, organizationId } = await setup();
-  const seeded = await seedStepAsset(organizationId, FREE_STORAGE_BYTES - 10);
+  const seeded = await seedStepAsset(organizationId, QUOTA_BYTES - 10);
 
   const refused = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
   expect(refused.status).toBe(403);
@@ -245,8 +236,9 @@ test('deleting a doc frees the quota', async () => {
 });
 
 test('snaps ignore the storage quota', async () => {
+  withEnv({ STORAGE_QUOTA_BYTES: String(QUOTA_BYTES) });
   const { post, organizationId } = await setup();
-  await seedStepAsset(organizationId, FREE_STORAGE_BYTES);
+  await seedStepAsset(organizationId, QUOTA_BYTES);
 
   const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'snap' } });
 
@@ -254,20 +246,11 @@ test('snaps ignore the storage quota', async () => {
 });
 
 test('brand uploads ignore the storage quota', async () => {
+  withEnv({ STORAGE_QUOTA_BYTES: String(QUOTA_BYTES) });
   const { post, organizationId } = await setup();
-  await seedStepAsset(organizationId, FREE_STORAGE_BYTES);
+  await seedStepAsset(organizationId, QUOTA_BYTES);
 
   const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'brand' } });
-
-  expect(response.status).toBe(201);
-});
-
-test('a non-free plan has no storage cap', async () => {
-  const { post, organizationId } = await setup();
-  await prisma.workspaceBilling.create({ data: { organizationId, plan: 'pro' } });
-  await seedStepAsset(organizationId, FREE_STORAGE_BYTES);
-
-  const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
 
   expect(response.status).toBe(201);
 });
@@ -298,7 +281,7 @@ test('rejects an unknown kind with 422', async () => {
 });
 
 test('mid-stream disconnect leaves no Asset row and no orphaned Drive object', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
 
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -315,12 +298,11 @@ test('mid-stream disconnect leaves no Asset row and no orphaned Drive object', a
     'validation_failed',
   );
   expect(await prisma.asset.count()).toBe(0);
-  expect(await prisma.usageDaily.count()).toBe(0);
-  expect(await storedFiles(root)).toEqual([]);
+  expect(await storedFiles(storage)).toEqual([]);
 });
 
 test('rejects content-length over 10MB before reading body', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
 
   // A body that would throw if read: the 413 must come from the header alone.
   const body = new ReadableStream<Uint8Array>({
@@ -339,11 +321,11 @@ test('rejects content-length over 10MB before reading body', async () => {
     'payload_too_large',
   );
   expect(await prisma.asset.count()).toBe(0);
-  expect(await storedFiles(root)).toEqual([]);
+  expect(await storedFiles(storage)).toEqual([]);
 });
 
 test('aborts with 413 when actual bytes exceed 10MB despite a smaller header', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
 
   let cancelled = false;
   const chunk = new Uint8Array(1024 * 1024);
@@ -364,7 +346,7 @@ test('aborts with 413 when actual bytes exceed 10MB despite a smaller header', a
   expect(response.status).toBe(413);
   expect(cancelled).toBe(true);
   expect(await prisma.asset.count()).toBe(0);
-  expect(await storedFiles(root)).toEqual([]);
+  expect(await storedFiles(storage)).toEqual([]);
 });
 
 test('accepts a file at exactly 10MB', async () => {
@@ -381,7 +363,7 @@ test('accepts a file at exactly 10MB', async () => {
 });
 
 test('rejects SVG with 415 before decoding', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
 
   const response = await post({
     body: svgBytes(),
@@ -393,11 +375,11 @@ test('rejects SVG with 415 before decoding', async () => {
     'unsupported_media_type',
   );
   expect(await prisma.asset.count()).toBe(0);
-  expect(await storedFiles(root)).toEqual([]);
+  expect(await storedFiles(storage)).toEqual([]);
 });
 
 test('rejects a PNG lying about 1M x 1M pixels with 422', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
 
   const response = await post({
     body: pngWithDimensions(1_000_000, 1_000_000),
@@ -409,7 +391,7 @@ test('rejects a PNG lying about 1M x 1M pixels with 422', async () => {
     'image_too_many_pixels',
   );
   expect(await prisma.asset.count()).toBe(0);
-  expect(await storedFiles(root)).toEqual([]);
+  expect(await storedFiles(storage)).toEqual([]);
 });
 
 test('rejects a genuine 15k x 15k PNG with 422', async () => {
@@ -429,7 +411,7 @@ test('rejects a genuine 15k x 15k PNG with 422', async () => {
 });
 
 test('maps ERR_IMAGE_UNKNOWN_FORMAT to 415', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
 
   // Real PNG magic bytes, then garbage: sniffing passes, the decoder does not.
   const bytes = new Uint8Array([
@@ -443,7 +425,7 @@ test('maps ERR_IMAGE_UNKNOWN_FORMAT to 415', async () => {
     'unsupported_media_type',
   );
   expect(await prisma.asset.count()).toBe(0);
-  expect(await storedFiles(root)).toEqual([]);
+  expect(await storedFiles(storage)).toEqual([]);
 });
 
 test('accepts a WebP identified by its RIFF/WEBP magic bytes', async () => {
@@ -455,160 +437,90 @@ test('accepts a WebP identified by its RIFF/WEBP magic bytes', async () => {
 });
 
 test('rejects a RIFF file that is not WEBP with 415', async () => {
-  const { post, root } = await setup();
+  const { post, storage } = await setup();
   const wave = new Uint8Array(64);
   wave.set(new TextEncoder().encode('RIFF'), 0);
   wave.set(new TextEncoder().encode('WAVE'), 8);
   const response = await post({ body: wave, headers: { 'x-opendocs-kind': 'step' } });
   expect(response.status).toBe(415);
-  expect(await storedFiles(root)).toHaveLength(0);
+  expect(await storedFiles(storage)).toHaveLength(0);
 });
 
 test('a failed database write deletes the stored file', async () => {
-  const { post, root } = await setup();
-  // The session still names the workspace, so auth passes, but the Asset insert hits the FK.
-  await prisma.organization.deleteMany();
-  const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
-  expect(response.status).toBe(500);
-  expect(await storedFiles(root)).toHaveLength(0);
+  const { post, storage } = await setup();
+  const originalCreate = prisma.asset.create;
+  (prisma.asset as { create: unknown }).create = () => {
+    throw new Error('database down');
+  };
+  try {
+    const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
+    expect(response.status).toBe(500);
+  } finally {
+    (prisma.asset as { create: unknown }).create = originalCreate;
+  }
+  expect(storedFiles(storage)).toHaveLength(0);
   expect(await prisma.asset.count()).toBe(0);
 });
 
-/**
- * Exercises the real per-workspace routing decision (`resolveUploadProvider`): no
- * `storage` override, so Free must land on OpenDocs storage and a connected,
- * active `StorageConnection` must receive the bytes instead, for Pro/Enterprise.
- */
-const setupRouted = async (storageConnectionProvider?: (connection: unknown) => Storage['provider']) => {
-  const app = createApp(
-    async () => {},
-    undefined,
-    storageConnectionProvider as Parameters<typeof createApp>[2],
-  );
-  const cookie = await signIn(app);
-  const session = await prisma.session.findFirstOrThrow({
-    where: { activeOrganizationId: { not: null } },
-    orderBy: { createdAt: 'desc' },
-  });
-  const organizationId = session.activeOrganizationId!;
-  const post = (init: { body?: BodyInit | null; headers?: Record<string, string> }) =>
-    app.handle(
-      new Request(`${BASE_URL}/api/v1/assets`, {
-        method: 'POST',
-        headers: { cookie, 'content-type': 'image/png', ...init.headers },
-        body: init.body ?? null,
-      }),
-    );
-  return { app, cookie, organizationId, post };
-};
-
-test('Free workspace uploads go to OpenDocs storage even with a connected StorageConnection on file', async () => {
-  const objects = new Map<string, Uint8Array>();
-  const fakeDrive: Storage['provider'] = {
-    name: 'drive',
-    upload: async (_account, _key, bytes) => {
-      const fileId = crypto.randomUUID();
-      objects.set(fileId, bytes);
-      return { fileId };
-    },
-    read: async (_account, fileId) => objects.get(fileId)!,
-    delete: async (_account, fileId) => void objects.delete(fileId),
-  };
-  const { post, organizationId } = await setupRouted(() => fakeDrive);
-  // A connected, active StorageConnection exists, but the workspace is still Free.
-  await prisma.storageConnection.create({
-    data: {
-      organizationId,
-      kind: 'gdrive',
-      config: { folderId: 'folder-1' },
-      secret: 'irrelevant-for-this-test',
-      status: 'connected',
-    },
-  });
-  await prisma.workspaceSite.create({
-    data: { organizationId, siteTitle: 'Site', storageKind: 'gdrive' },
-  });
+test('with no STORAGE_QUOTA_BYTES (0) there is no cap on step uploads', async () => {
+  const { post, organizationId } = await setup();
+  await seedStepAsset(organizationId, QUOTA_BYTES * 2);
 
   const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
 
   expect(response.status).toBe(201);
-  const body = (await response.json()) as { id: string };
-  const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: body.id } });
-  expect(asset.provider).toBe(getStorage().provider.name);
-  expect(objects.size).toBe(0);
 });
 
-test('Pro workspace with an active connected StorageConnection uploads there, not to OpenDocs storage', async () => {
-  const objects = new Map<string, Uint8Array>();
-  const fakeDrive: Storage['provider'] = {
-    name: 'drive',
-    upload: async (_account, _key, bytes) => {
-      const fileId = crypto.randomUUID();
-      objects.set(fileId, bytes);
-      return { fileId };
-    },
-    read: async (_account, fileId) => objects.get(fileId)!,
-    delete: async (_account, fileId) => void objects.delete(fileId),
-  };
-  const { post, organizationId } = await setupRouted(() => fakeDrive);
-  await prisma.workspaceBilling.create({ data: { organizationId, plan: 'pro' } });
-  const connection = await prisma.storageConnection.create({
-    data: {
-      organizationId,
-      kind: 'gdrive',
-      config: { folderId: 'folder-1' },
-      secret: 'irrelevant-for-this-test',
-      status: 'connected',
-    },
-  });
-  await prisma.workspaceSite.create({
-    data: { organizationId, siteTitle: 'Site', storageKind: 'gdrive' },
-  });
+test('STORAGE_QUOTA_BYTES refuses an over-cap step upload with 403 and stores nothing', async () => {
+  withEnv({ STORAGE_QUOTA_BYTES: '1000' });
+  const { post, storage, organizationId } = await setup();
+  await seedStepAsset(organizationId, 1000);
+
+  const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
+
+  expect(response.status).toBe(403);
+  expect(((await response.json()) as { error: { code: string } }).error.code).toBe(
+    'storage_quota_exceeded',
+  );
+  expect(storedFiles(storage)).toEqual([]);
+});
+
+test('MAX_UPLOAD_BYTES override gives 413 above it and accepts exactly it', async () => {
+  const bytes = tinyPng();
+  withEnv({ MAX_UPLOAD_BYTES: String(bytes.byteLength) });
+  const { post, storage } = await setup();
+
+  const ok = await post({ body: bytes, headers: { 'x-opendocs-kind': 'step' } });
+  expect(ok.status).toBe(201);
+
+  const bigger = new Uint8Array(bytes.byteLength + 1);
+  bigger.set(bytes);
+  const refused = await post({ body: bigger, headers: { 'x-opendocs-kind': 'step' } });
+  expect(refused.status).toBe(413);
+  expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('payload_too_large');
+  expect(storedFiles(storage)).toHaveLength(1);
+});
+
+test('ASSET_BASE_URL makes the upload url point at the prefixed object key', async () => {
+  withEnv({ ASSET_BASE_URL: 'https://cdn.example.com/media', S3_PREFIX: 'docs' });
+  const { post } = await setup();
+
+  const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
+
+  expect(response.status).toBe(201);
+  const body = (await response.json()) as { id: string; url: string };
+  const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: body.id } });
+  expect(body.url).toBe(`https://cdn.example.com/media/docs/${asset.providerFileId}`);
+});
+
+test('the stored object key is providerFileId', async () => {
+  const { post, storage } = await setup();
   const bytes = tinyPng();
 
   const response = await post({ body: bytes, headers: { 'x-opendocs-kind': 'step' } });
-
-  expect(response.status).toBe(201);
   const body = (await response.json()) as { id: string };
   const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: body.id } });
-  expect(asset.provider).toBe('drive');
-  expect(asset.providerAccount).toBe(connection.id);
-  expect(objects.size).toBe(1);
-  expect(Array.from(objects.values())[0]).toEqual(bytes);
-});
 
-test('Pro workspace with no active StorageConnection falls back to OpenDocs storage, unchanged', async () => {
-  const { post, organizationId } = await setupRouted();
-  await prisma.workspaceBilling.create({ data: { organizationId, plan: 'pro' } });
-
-  const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
-
-  expect(response.status).toBe(201);
-  const body = (await response.json()) as { id: string };
-  const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: body.id } });
-  expect(asset.provider).toBe(getStorage().provider.name);
-});
-
-test('an active StorageConnection that is not connected (failed test) fails the upload instead of a silent fallback', async () => {
-  const { post, organizationId } = await setupRouted();
-  await prisma.workspaceBilling.create({ data: { organizationId, plan: 'pro' } });
-  await prisma.storageConnection.create({
-    data: {
-      organizationId,
-      kind: 'gdrive',
-      config: { folderId: 'folder-1' },
-      secret: 'irrelevant-for-this-test',
-      status: 'failed',
-    },
-  });
-  await prisma.workspaceSite.create({
-    data: { organizationId, siteTitle: 'Site', storageKind: 'gdrive' },
-  });
-  const before = await prisma.asset.count();
-
-  const response = await post({ body: tinyPng(), headers: { 'x-opendocs-kind': 'step' } });
-
-  // Never a silent fallback to OpenDocs storage: the broken connection fails the upload.
-  expect(response.status).toBe(500);
-  expect(await prisma.asset.count()).toBe(before);
+  expect(storage.objects.has(asset.providerFileId)).toBe(true);
+  expect(await storage.read(asset.providerFileId)).toEqual(bytes);
 });

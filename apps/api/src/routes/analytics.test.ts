@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
   BASE_URL,
   cleanDatabase,
-  OTHER_GITHUB_ACCOUNT,
   realFetch,
   signIn,
   type App,
@@ -156,12 +155,12 @@ test('records helpful votes and calculates marked_helpful_percent', async () => 
   expect(body.marked_helpful_percent).toBe(67);
 });
 
-test('public endpoint POST /api/v1/site/:slug/guides/:guideSlug/view records a view', async () => {
+test('public endpoint POST /api/v1/site/guides/:guideSlug/view records a view', async () => {
   const ws = await setupWorkspace();
   const flow = await createFlow(ws.orgId, 'Public Guide', 'public-guide');
 
   const viewRes = await app.handle(
-    new Request(`${BASE_URL}/api/v1/site/${ws.slug}/guides/${flow.slug}/view`, {
+    new Request(`${BASE_URL}/api/v1/site/guides/${flow.slug}/view`, {
       method: 'POST',
     }),
   );
@@ -174,12 +173,12 @@ test('public endpoint POST /api/v1/site/:slug/guides/:guideSlug/view records a v
   expect(daily?.views).toBe(1);
 });
 
-test('public endpoint POST /api/v1/site/:slug/guides/:guideSlug/vote records votes and rejects non-boolean', async () => {
+test('public endpoint POST /api/v1/site/guides/:guideSlug/vote records votes and rejects non-boolean', async () => {
   const ws = await setupWorkspace();
   const flow = await createFlow(ws.orgId, 'Voted Guide', 'voted-guide');
 
   const badRes = await app.handle(
-    new Request(`${BASE_URL}/api/v1/site/${ws.slug}/guides/${flow.slug}/vote`, {
+    new Request(`${BASE_URL}/api/v1/site/guides/${flow.slug}/vote`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ helpful: 'yes' }),
@@ -188,7 +187,7 @@ test('public endpoint POST /api/v1/site/:slug/guides/:guideSlug/vote records vot
   expect(badRes.status).toBe(422);
 
   const voteYesRes = await app.handle(
-    new Request(`${BASE_URL}/api/v1/site/${ws.slug}/guides/${flow.slug}/vote`, {
+    new Request(`${BASE_URL}/api/v1/site/guides/${flow.slug}/vote`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ helpful: true }),
@@ -197,7 +196,7 @@ test('public endpoint POST /api/v1/site/:slug/guides/:guideSlug/vote records vot
   expect(voteYesRes.status).toBe(200);
 
   const voteNoRes = await app.handle(
-    new Request(`${BASE_URL}/api/v1/site/${ws.slug}/guides/${flow.slug}/vote`, {
+    new Request(`${BASE_URL}/api/v1/site/guides/${flow.slug}/vote`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ helpful: false }),

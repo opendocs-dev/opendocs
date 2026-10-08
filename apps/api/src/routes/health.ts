@@ -23,8 +23,9 @@ export const checkDatabase: DatabaseCheck = async () => {
   await prisma.$queryRaw`SELECT 1`;
 };
 
-export const healthRoute = (checkDb: DatabaseCheck = checkDatabase) =>
-  new Elysia().get('/api/healthz', async ({ status }) => {
+/** `/api/health` is the documented path; `/api/healthz` stays for existing probes (Docker HEALTHCHECK). */
+export const healthRoute = (checkDb: DatabaseCheck = checkDatabase) => {
+  const databaseIsUp = async (): Promise<boolean> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     try {
@@ -34,10 +35,16 @@ export const healthRoute = (checkDb: DatabaseCheck = checkDatabase) =>
           timer = setTimeout(() => reject(new Error('Database check timed out')), 2000);
         }),
       ]);
-      return status(200, { status: 'ok', db: 'up' });
+      return true;
     } catch {
-      return status(503, { status: 'error', db: 'down' });
+      return false;
     } finally {
       if (timer) clearTimeout(timer);
     }
-  });
+  };
+
+  const answer = async ({ status }: { status: (code: 200 | 503, body: { status: string; db: string }) => unknown }) =>
+    (await databaseIsUp()) ? status(200, { status: 'ok', db: 'up' }) : status(503, { status: 'error', db: 'down' });
+
+  return new Elysia().get('/api/health', answer as never).get('/api/healthz', answer as never);
+};

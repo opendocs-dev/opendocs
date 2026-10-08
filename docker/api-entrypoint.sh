@@ -9,6 +9,9 @@ fi
 
 cd /app/apps/api
 
+# Validate the whole env first, so a bad config fails with one readable list before migrating.
+bun src/env-check.ts
+
 echo "Deploying database migrations..."
 bun run prisma:deploy
 

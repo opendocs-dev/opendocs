@@ -52,7 +52,7 @@ export const fileUnderCategory = async (
   }
 
   // Read workspace policy (defaults to 'suggest')
-  const site = await tx.workspaceSite.findUnique({
+  const site = await tx.siteSettings.findUnique({
     where: { organizationId },
     select: { categoryPolicy: true },
   });

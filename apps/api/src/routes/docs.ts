@@ -6,6 +6,7 @@ import {
   type Viewport,
 } from '@opendocs/core';
 import { Elysia } from 'elysia';
+import { assetUrl } from '../asset-url';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
 
@@ -13,6 +14,7 @@ const notFound = () => new ApiError(404, 'not_found', 'Doc not found');
 
 type AssetForImage = {
   publicId: string;
+  providerFileId: string;
   deletedAt: Date | null;
   expiresAt: Date | null;
   width: number;
@@ -26,7 +28,7 @@ export const imageFor = (asset: AssetForImage): DocStepImage => {
   }
 
   return {
-    url: `${process.env.ASSET_BASE_URL}/i/${asset.publicId}`,
+    url: assetUrl(asset),
     expired: false,
     width: asset.width,
     height: asset.height,

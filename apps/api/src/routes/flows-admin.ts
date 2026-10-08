@@ -1,12 +1,12 @@
 import { Elysia } from 'elysia';
-import { FREE_STORAGE_BYTES } from '../legacy-limits';
 import { auth } from '../auth';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
-import { getPlan } from '../plan';
+import { getLimits } from '../env';
 import { startOfUtcDay } from '../quota';
 import { roleFor } from '../site/role';
 import { refreshSearchDocument } from '../site/search-doc';
+import { getInstanceOrg } from '../instance-org';
 
 const unauthorized = (message: string) => new ApiError(403, 'unauthorized', message);
 const invalid = (message: string) => new ApiError(422, 'validation_failed', message);
@@ -15,7 +15,7 @@ const conflict = (message: string) => new ApiError(409, 'validation_failed', mes
 
 const requireSessionAndMember = async (request: Request) => {
   const session = await auth.api.getSession({ headers: request.headers });
-  const organizationId = session?.session.activeOrganizationId;
+  const organizationId = session ? (await getInstanceOrg()).id : undefined;
   if (!session || !organizationId) {
     throw new ApiError(401, 'unauthorized', 'A valid session is required');
   }
@@ -41,11 +41,6 @@ const readJsonBody = async (request: Request): Promise<Record<string, unknown>> 
   }
 
   return (parsed as Record<string, unknown>) ?? {};
-};
-
-const siteHostFor = (slug: string): string | null => {
-  const base = process.env.TENANT_BASE_DOMAIN;
-  return base ? `${slug}.${base}` : null;
 };
 
 export const flowsAdminRoute = new Elysia()
@@ -295,7 +290,6 @@ export const flowsAdminRoute = new Elysia()
         hasKey,
         views30dAgg,
         searches30dAgg,
-        plan,
         storageUsage,
       ] = await Promise.all([
         prisma.flow.count({
@@ -331,7 +325,6 @@ export const flowsAdminRoute = new Elysia()
           },
           _sum: { times: true },
         }),
-        getPlan(organizationId),
         prisma.asset.aggregate({
           where: {
             organizationId,
@@ -343,19 +336,13 @@ export const flowsAdminRoute = new Elysia()
         }),
       ]);
 
-      const organization = await prisma.organization.findUnique({
-        where: { id: organizationId },
-        select: { slug: true },
-      });
-      if (!organization) throw notFound();
-
       const hasGuide = publishedCount + unlistedCount + draftCount > 0;
-      const siteHost = siteHostFor(organization.slug);
 
       const liveBytes = storageUsage._sum.bytes ?? 0;
       let storageUsed = '0%';
-      if (plan === 'free') {
-        const percent = Math.min(100, Math.round((Number(liveBytes) / FREE_STORAGE_BYTES) * 100));
+      const { storageQuotaBytes } = getLimits();
+      if (storageQuotaBytes > 0) {
+        const percent = Math.min(100, Math.round((Number(liveBytes) / storageQuotaBytes) * 100));
         storageUsed = `${percent}%`;
       }
 
@@ -367,7 +354,6 @@ export const flowsAdminRoute = new Elysia()
         suggested_categories: suggestedCount,
         has_key: hasKey !== null,
         has_guide: hasGuide,
-        site_host: siteHost,
         views_30d: views30dAgg._sum.views ?? 0,
         searches: searches30dAgg._sum.times ?? 0,
         storage_used: storageUsed,

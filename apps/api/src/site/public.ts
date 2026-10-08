@@ -1,8 +1,10 @@
 import { Elysia } from 'elysia';
 import type { Prisma } from '../../generated/prisma/client';
 import { getPrisma } from '../db';
+import { getEnv } from '../env';
 import { ApiError } from '../errors';
-import { getPlan } from '../plan';
+import { assetUrl } from '../asset-url';
+import { getInstanceOrg } from '../instance-org';
 import { toDocStep } from '../routes/docs';
 import { recordHelpfulVote, recordSearch, recordView } from '../analytics/events';
 import {
@@ -11,7 +13,7 @@ import {
   voteChatMessage,
 } from '../assistant/chat-service';
 
-/** Every unknown/suspended/draft/deleted/unlisted-by-list case answers with this one body. */
+/** Every unknown/draft/deleted/unlisted-by-list case answers with this one body. */
 const notFound = () => new ApiError(404, 'not_found', 'Not found');
 
 const DEFAULT_LIMIT = 20;
@@ -52,15 +54,8 @@ const summaryFor = (summary: string | null, firstStepInstruction: string | null)
   return `${firstStepInstruction.slice(0, SUMMARY_CUT)}…`;
 };
 
-/** Resolves a workspace by its `Organization.slug`; unknown or suspended is indistinguishable. */
-const requireWorkspace = async (rawSlug: string): Promise<string> => {
-  const organization = await getPrisma().organization.findUnique({
-    where: { slug: rawSlug.toLowerCase() },
-    select: { id: true, suspendedAt: true },
-  });
-  if (!organization || organization.suspendedAt) throw notFound();
-  return organization.id;
-};
+/** The public API serves the one instance workspace; there is no slug in the path (C23 AC-11). */
+const requireWorkspace = async (): Promise<string> => (await getInstanceOrg()).id;
 
 const listedGuidesWhere = (organizationId: string): Prisma.FlowWhereInput => ({
   organizationId,
@@ -70,9 +65,9 @@ const listedGuidesWhere = (organizationId: string): Prisma.FlowWhereInput => ({
 });
 
 export const publicRoute = new Elysia()
-  .get('/api/v1/site/:slug/categories', async ({ params, set }) => {
+  .get('/api/v1/site/categories', async ({ set }) => {
     set.headers['cache-control'] = CACHE_CONTROL;
-    const organizationId = await requireWorkspace(params.slug);
+    const organizationId = await requireWorkspace();
     const prisma = getPrisma();
 
     const listedWhere = listedGuidesWhere(organizationId);
@@ -111,20 +106,19 @@ export const publicRoute = new Elysia()
         .filter((cat) => cat.guides > 0),
     };
   })
-  .get('/api/v1/site/:slug/info', async ({ params, set }) => {
+  .get('/api/v1/site/info', async ({ set }) => {
     set.headers['cache-control'] = CACHE_CONTROL;
-    const organizationId = await requireWorkspace(params.slug);
+    const organizationId = await requireWorkspace();
     const prisma = getPrisma();
 
-    const [organization, site, plan, guides, assistantConfig] = await Promise.all([
+    const [organization, site, guides, assistantConfig] = await Promise.all([
       prisma.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { name: true } }),
-      prisma.workspaceSite.findUnique({
+      prisma.siteSettings.findUnique({
         where: { organizationId },
         include: { faviconAsset: true, ogAsset: true },
       }),
-      getPlan(organizationId),
       prisma.flow.count({ where: listedGuidesWhere(organizationId) }),
-      getPublicAssistantConfig(organizationId),
+      getPublicAssistantConfig(),
     ]);
 
     return {
@@ -132,22 +126,20 @@ export const publicRoute = new Elysia()
       tagline: site?.tagline ?? '',
       description: site?.description ?? '',
       preset: site?.preset ?? 'sage',
-      accent: plan === 'enterprise' ? (site?.accent ?? null) : null,
-      mark: plan === 'enterprise' ? (site?.mark ?? null) : null,
-      font: plan === 'enterprise' ? (site?.font ?? null) : null,
-      radius: plan === 'enterprise' ? (site?.radius ?? null) : null,
+      accent: site?.accent ?? null,
+      mark: site?.mark ?? null,
+      font: site?.font ?? null,
+      radius: site?.radius ?? null,
       indexing: site?.indexing ?? true,
-      is_free_plan: plan === 'free',
       guides,
-      favicon_url: site?.faviconAsset ? `${process.env.ASSET_BASE_URL}/i/${site.faviconAsset.publicId}` : null,
-      og_image_url: site?.ogAsset ? `${process.env.ASSET_BASE_URL}/i/${site.ogAsset.publicId}` : null,
-      custom_meta: (site?.customMeta as { name: string; content: string }[] | undefined) ?? [],
+      favicon_url: site?.faviconAsset ? assetUrl(site.faviconAsset) : null,
+      og_image_url: site?.ogAsset ? assetUrl(site.ogAsset) : null,
       assistant: assistantConfig.enabled ? assistantConfig : null,
     };
   })
-  .get('/api/v1/site/:slug/guides', async ({ params, query, set }) => {
+  .get('/api/v1/site/guides', async ({ query, set }) => {
     set.headers['cache-control'] = CACHE_CONTROL;
-    const organizationId = await requireWorkspace(params.slug);
+    const organizationId = await requireWorkspace();
     const limit = parseLimit(query.limit as string | undefined);
     const offset = parseOffset(query.offset as string | undefined);
     const prisma = getPrisma();
@@ -219,9 +211,9 @@ export const publicRoute = new Elysia()
       total,
     };
   })
-  .get('/api/v1/site/:slug/search', async ({ params, query, set }) => {
+  .get('/api/v1/site/search', async ({ query, set }) => {
     set.headers['cache-control'] = CACHE_CONTROL;
-    const organizationId = await requireWorkspace(params.slug);
+    const organizationId = await requireWorkspace();
 
     const raw = typeof query.q === 'string' ? query.q : '';
     const trimmed = raw.trim().slice(0, 100);
@@ -334,9 +326,9 @@ export const publicRoute = new Elysia()
       counts,
     };
   })
-  .get('/api/v1/site/:slug/guides/:guideSlug', async ({ params, set }) => {
+  .get('/api/v1/site/guides/:guideSlug', async ({ params, set }) => {
     set.headers['cache-control'] = CACHE_CONTROL;
-    const organizationId = await requireWorkspace(params.slug);
+    const organizationId = await requireWorkspace();
     const prisma = getPrisma();
 
     const flow = await prisma.flow.findFirst({
@@ -372,7 +364,6 @@ export const publicRoute = new Elysia()
       orderBy: { order: 'asc' },
       include: { asset: true },
     });
-    const plan = await getPlan(flow.organizationId);
 
     const listedWhere = listedGuidesWhere(organizationId);
     const [prevRow, nextRow] = await Promise.all([
@@ -399,8 +390,6 @@ export const publicRoute = new Elysia()
     return {
       public_id: flow.publicId,
       title: flow.title,
-      plan,
-      is_free_plan: plan === 'free',
       steps: steps.map((step, index) => toDocStep({ ...step, order: index + 1 })),
       slug: flow.slug!,
       summary: summaryFor(flow.summary, steps[0]?.instruction ?? null),
@@ -416,8 +405,8 @@ export const publicRoute = new Elysia()
       next: nextRow ? { slug: nextRow.slug!, title: nextRow.title } : null,
     };
   })
-  .post('/api/v1/site/:slug/guides/:guideSlug/view', async ({ params }) => {
-    const organizationId = await requireWorkspace(params.slug);
+  .post('/api/v1/site/guides/:guideSlug/view', async ({ params }) => {
+    const organizationId = await requireWorkspace();
     const prisma = getPrisma();
     const flow = await prisma.flow.findFirst({
       where: {
@@ -434,8 +423,8 @@ export const publicRoute = new Elysia()
     await recordView(flow.id);
     return { ok: true };
   })
-  .post('/api/v1/site/:slug/guides/:guideSlug/vote', async ({ params, body }) => {
-    const organizationId = await requireWorkspace(params.slug);
+  .post('/api/v1/site/guides/:guideSlug/vote', async ({ params, body }) => {
+    const organizationId = await requireWorkspace();
     const prisma = getPrisma();
     const flow = await prisma.flow.findFirst({
       where: {
@@ -461,14 +450,12 @@ export const publicRoute = new Elysia()
     return { ok: true };
   })
   /**
-   * Public and unauthenticated, additive to the apex doc route: the tenant-site URL for a
-   * doc, when one exists. 404 (the same shared body) whenever the doc has no reachable
-   * tenant page, so this never reveals more than the apex /api/v1/docs/:publicId route does.
+   * Public and unauthenticated: the reader URL of a published doc on this instance. 404
+   * (the same shared body) whenever the doc has no reachable reader page, so this never
+   * reveals more than the /api/v1/docs/:publicId route does.
    */
   .get('/api/v1/docs/:publicId/canonical', async ({ params, set }) => {
     set.headers['cache-control'] = CACHE_CONTROL;
-    const base = process.env.TENANT_BASE_DOMAIN;
-    if (!base) throw notFound();
 
     const flow = await getPrisma().flow.findFirst({
       where: {
@@ -478,20 +465,18 @@ export const publicRoute = new Elysia()
         visibility: 'published',
         slug: { not: null },
       },
-      select: { slug: true, organization: { select: { slug: true, suspendedAt: true } } },
+      select: { slug: true },
     });
-    if (!flow || !flow.slug || flow.organization.suspendedAt) throw notFound();
+    if (!flow || !flow.slug) throw notFound();
 
-    return { url: `https://${flow.organization.slug}.${base}/g/${flow.slug}` };
+    return { url: `${getEnv().publicUrl}/g/${flow.slug}` };
   })
-  .get('/api/v1/site/:slug/assistant', async ({ params, set }) => {
+  .get('/api/v1/site/assistant', async ({ set }) => {
     set.headers['cache-control'] = CACHE_CONTROL;
-    const organizationId = await requireWorkspace(params.slug);
-    const config = await getPublicAssistantConfig(organizationId);
-    return { assistant: config };
+    return getPublicAssistantConfig();
   })
-  .post('/api/v1/site/:slug/chat', async ({ params, body, request }) => {
-    const organizationId = await requireWorkspace(params.slug);
+  .post('/api/v1/site/chat', async ({ body, request }) => {
+    if (!getEnv().ai.enabled) throw notFound();
     const clientIp =
       request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
       request.headers.get('cf-connecting-ip')?.trim() ||
@@ -539,10 +524,10 @@ export const publicRoute = new Elysia()
           ? body.conversationId
           : undefined;
 
-    return processChat(organizationId, rawMessage, visitorKey, conversationId);
+    return processChat(rawMessage, visitorKey, conversationId);
   })
-  .post('/api/v1/site/:slug/chat/:messageId/vote', async ({ params, body, request }) => {
-    const organizationId = await requireWorkspace(params.slug);
+  .post('/api/v1/site/chat/:messageId/vote', async ({ params, body, request }) => {
+    if (!getEnv().ai.enabled) throw notFound();
     const clientIp =
       request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
       request.headers.get('cf-connecting-ip')?.trim() ||
@@ -593,5 +578,5 @@ export const publicRoute = new Elysia()
       feedback = body.feedback;
     }
 
-    return voteChatMessage(organizationId, params.messageId, visitorKey, helpful, feedback);
+    return voteChatMessage(params.messageId, visitorKey, helpful, feedback);
   });
