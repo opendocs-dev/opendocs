@@ -1,7 +1,7 @@
 import { Elysia } from 'elysia';
 import { getPrisma } from '../db';
 import { ApiError } from '../errors';
-import { getStorage, resolveStorageProvider, type Storage } from '../storage/provider';
+import { getStorage, type Storage } from '../storage/provider';
 
 const MAX_AGE = 3600;
 
@@ -21,12 +21,12 @@ const maxAge = (expiresAt: Date | null, now: number) => {
 };
 
 /**
- * Public, unauthenticated image delivery at the root: the publicId is the only
- * credential, which is why nothing here reveals the storage provider (no redirect to
- * the backing object, no provider URL in headers or body).
+ * Public, unauthenticated image delivery under `/api` (so it shares the one public
+ * origin): the publicId is the only credential, which is why nothing here reveals the
+ * bucket (no redirect to the backing object, no storage URL in headers or body).
  */
 export const imagesRoute = (storage?: Storage) =>
-  new Elysia().get('/i/:id', async ({ params, set }) => {
+  new Elysia().get('/api/i/:id', async ({ params, set }) => {
     // Set first so every failure path below is uncacheable, whichever way the error
     // plugin turns the ApiError into a response.
     set.headers['cache-control'] = 'no-store';
@@ -44,11 +44,7 @@ export const imagesRoute = (storage?: Storage) =>
 
     let bytes: Uint8Array;
     try {
-      // A test-injected storage override always wins (it is simulating a specific
-      // provider, e.g. a failing read); otherwise the asset's own recorded provider
-      // decides, never the deployment-wide STORAGE_PROVIDER.
-      const provider = storage ? storage.provider : resolveStorageProvider(asset.provider);
-      bytes = await provider.read(asset.providerAccount, asset.providerFileId);
+      bytes = await (storage ?? getStorage()).read(asset.providerFileId);
     } catch {
       throw new ApiError(500, 'internal_error', 'Image could not be read');
     }
