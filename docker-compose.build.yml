@@ -1,0 +1,11 @@
+# Build the images from this checkout instead of pulling them from ghcr.io:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web

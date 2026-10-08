@@ -1,4 +1,5 @@
 # OpenDocs self-host. Copy .env.example to .env, edit it, then: docker compose up -d
+# Images come from ghcr.io; to build them from source add: -f docker-compose.build.yml (see README).
 # Put a reverse proxy with TLS in front of the web port and set PUBLIC_URL to its https URL.
 services:
   postgres:
@@ -42,9 +43,7 @@ services:
       MC_HOST_local: http://${S3_ACCESS_KEY_ID}:${S3_SECRET_ACCESS_KEY}@minio:9000
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
+    image: ghcr.io/opendocs-dev/opendocs-api:${OPENDOCS_VERSION:-latest}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -59,16 +58,13 @@ services:
         required: false
 
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile.web
-      args:
-        # /api/* is proxied to the api over the compose network.
-        API_ORIGIN: http://api:4000
-        BETTER_AUTH_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env}
+    image: ghcr.io/opendocs-dev/opendocs-web:${OPENDOCS_VERSION:-latest}
     restart: unless-stopped
     environment:
       PORT: "3000"
+      # Read at runtime: /api/* is proxied to the api over the compose network.
+      API_ORIGIN: http://api:4000
+      PUBLIC_APP_ORIGIN: ${PUBLIC_URL:?set PUBLIC_URL in .env}
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:

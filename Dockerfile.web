@@ -2,22 +2,18 @@
 # OpenDocs Web Container (Dockerfile.web)
 #
 # Build command:
-#   docker build -f Dockerfile.web -t opendocs-web:<tag> \
-#     --build-arg API_ORIGIN=http://api:4000 \
-#     --build-arg BETTER_AUTH_URL=http://localhost:3000 \
-#     .
+#   docker build -f Dockerfile.web -t opendocs-web:<tag> .
 #
 # Build arguments:
 #   BUN_VERSION              Bun version to use (default: 1.4.2)
-#   API_ORIGIN               API origin for Next.js rewrites at build time (e.g. http://api:4000)
-#   BETTER_AUTH_URL          Better-Auth / app URL at build time (e.g. http://localhost:3000)
 #
-# Required runtime environment variables:
-#   API_ORIGIN               Target origin for API proxy / rewrites (default: http://localhost:4000)
+# Nothing deployment-specific is baked into the image: all config is read at runtime.
 #
-# Optional runtime environment variables:
+# Runtime environment variables:
+#   API_ORIGIN               Origin /api/* is proxied to, read per request (default: http://localhost:4000)
+#
 #   PORT                     Port for Next.js server (default: 3000)
-#   BETTER_AUTH_URL          Canonical public base URL (e.g. http://localhost:3000)
+#   PUBLIC_APP_ORIGIN        Canonical public base URL, used for share links and og:url (e.g. https://docs.example.com)
 #   NEXT_TELEMETRY_DISABLED  Disable Next.js telemetry (default: 1)
 # ==============================================================================
 
@@ -37,10 +33,6 @@ COPY . /app
 RUN bun install --frozen-lockfile
 
 # Build arguments exported as environment variables for next build
-ARG API_ORIGIN
-ARG BETTER_AUTH_URL
-ENV API_ORIGIN=${API_ORIGIN}
-ENV BETTER_AUTH_URL=${BETTER_AUTH_URL}
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
@@ -58,11 +50,6 @@ FROM oven/bun:${BUN_VERSION} AS runner
 
 WORKDIR /app
 
-# The build arg also becomes the runtime default (server-side fetches read API_ORIGIN at runtime); a runtime env var overrides it.
-ARG API_ORIGIN
-ARG BETTER_AUTH_URL
-ENV API_ORIGIN=${API_ORIGIN}
-ENV BETTER_AUTH_URL=${BETTER_AUTH_URL}
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV NEXT_TELEMETRY_DISABLED=1
