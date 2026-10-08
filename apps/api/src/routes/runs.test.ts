@@ -1,4 +1,4 @@
-import { FREE_STEPS_PER_RUN } from '@opendocs/core';
+import { DEFAULT_MAX_STEPS_PER_RUN } from '@opendocs/core';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -357,13 +357,13 @@ test('accepts the 15th step on Free', async () => {
   const run = await prisma.run.findUniqueOrThrow({ where: { publicId: sessionId } });
   const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: assetId } });
 
-  await seedSteps(run.id, asset.id, FREE_STEPS_PER_RUN - 1);
+  await seedSteps(run.id, asset.id, DEFAULT_MAX_STEPS_PER_RUN - 1);
 
   const response = await ws.addStep(sessionId, stepBody(assetId));
 
   expect(response.status).toBe(201);
-  expect((await response.json()) as { order: number }).toEqual({ order: FREE_STEPS_PER_RUN });
-  expect(await prisma.step.count()).toBe(FREE_STEPS_PER_RUN);
+  expect((await response.json()) as { order: number }).toEqual({ order: DEFAULT_MAX_STEPS_PER_RUN });
+  expect(await prisma.step.count()).toBe(DEFAULT_MAX_STEPS_PER_RUN);
 });
 
 test('rejects the 16th step on Free with 422 step_limit', async () => {
@@ -373,13 +373,13 @@ test('rejects the 16th step on Free with 422 step_limit', async () => {
   const run = await prisma.run.findUniqueOrThrow({ where: { publicId: sessionId } });
   const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: assetId } });
 
-  await seedSteps(run.id, asset.id, FREE_STEPS_PER_RUN);
+  await seedSteps(run.id, asset.id, DEFAULT_MAX_STEPS_PER_RUN);
 
   const response = await ws.addStep(sessionId, stepBody(assetId));
 
   expect(response.status).toBe(422);
   expect(await errorCode(response)).toBe('step_limit');
-  expect(await prisma.step.count()).toBe(FREE_STEPS_PER_RUN);
+  expect(await prisma.step.count()).toBe(DEFAULT_MAX_STEPS_PER_RUN);
 });
 
 test('a Pro run accepts a 16th step', async () => {
@@ -393,13 +393,13 @@ test('a Pro run accepts a 16th step', async () => {
   const run = await prisma.run.findUniqueOrThrow({ where: { publicId: sessionId } });
   const asset = await prisma.asset.findUniqueOrThrow({ where: { publicId: assetId } });
 
-  await seedSteps(run.id, asset.id, FREE_STEPS_PER_RUN);
+  await seedSteps(run.id, asset.id, DEFAULT_MAX_STEPS_PER_RUN);
 
   const response = await ws.addStep(sessionId, stepBody(assetId));
 
   expect(response.status).toBe(201);
-  expect((await response.json()) as { order: number }).toEqual({ order: FREE_STEPS_PER_RUN + 1 });
-  expect(await prisma.step.count()).toBe(FREE_STEPS_PER_RUN + 1);
+  expect((await response.json()) as { order: number }).toEqual({ order: DEFAULT_MAX_STEPS_PER_RUN + 1 });
+  expect(await prisma.step.count()).toBe(DEFAULT_MAX_STEPS_PER_RUN + 1);
 });
 
 test('adding a step to a compiled run returns 409', async () => {
