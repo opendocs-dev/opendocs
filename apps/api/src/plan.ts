@@ -1,4 +1,4 @@
-import { DAILY_QUOTAS, type Plan } from '@opendocs/core';
+import { DAILY_QUOTAS, type Plan } from './legacy-limits';
 import { getPrisma } from './db';
 
 /**
