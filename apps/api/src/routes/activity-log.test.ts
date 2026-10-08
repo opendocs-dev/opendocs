@@ -59,8 +59,8 @@ test('GET /api/v1/activity-log as owner or admin succeeds', async () => {
 
   expect(body.activity_logs.length).toBe(1);
   expect(body.activity_logs[0].action).toBe('Changed the site look to Atlas');
-  expect(body.retention_days).toBe(30);
-  expect(body.can_export).toBe(false);
+  expect(body.retention_days).toBe(365);
+  expect(body.can_export).toBe(true);
 
   // Admin role check
   await prisma.member.updateMany({ where: { organizationId: ws.organizationId }, data: { role: 'admin' } });
@@ -76,12 +76,13 @@ test('GET /api/v1/activity-log as editor returns 403', async () => {
   expect(response.status).toBe(403);
 });
 
-test('retention limits: free/pro plan sees 30 days, enterprise sees 365 days', async () => {
+test('retention is a fixed 365 days', async () => {
   const ws = await workspace(newApp());
 
   const now = Date.now();
   const tenDaysAgo = new Date(now - 10 * 86400000);
   const fortyDaysAgo = new Date(now - 40 * 86400000);
+  const fourHundredDaysAgo = new Date(now - 400 * 86400000);
 
   await prisma.auditLog.create({
     data: {
@@ -103,27 +104,26 @@ test('retention limits: free/pro plan sees 30 days, enterprise sees 365 days', a
     },
   });
 
-  // Free plan (default)
-  const freeRes = await get(ws.app, '/api/v1/activity-log', ws.cookie);
-  expect(freeRes.status).toBe(200);
-  const freeBody = (await freeRes.json()) as { activity_logs: Array<{ action: string }>; retention_days: number };
-  expect(freeBody.retention_days).toBe(30);
-  expect(freeBody.activity_logs.length).toBe(1);
-  expect(freeBody.activity_logs[0].action).toBe('Recent action (10 days ago)');
-
-  // Upgrade to Enterprise
-  await prisma.workspaceBilling.upsert({
-    where: { organizationId: ws.organizationId },
-    update: { plan: 'enterprise' },
-    create: { organizationId: ws.organizationId, plan: 'enterprise' },
+  await prisma.auditLog.create({
+    data: {
+      actorKind: 'user',
+      actorId: ws.userId,
+      organizationId: ws.organizationId,
+      action: 'Expired action (400 days ago)',
+      createdAt: fourHundredDaysAgo,
+    },
   });
 
-  const enterpriseRes = await get(ws.app, '/api/v1/activity-log', ws.cookie);
-  expect(enterpriseRes.status).toBe(200);
-  const entBody = (await enterpriseRes.json()) as { activity_logs: Array<{ action: string }>; retention_days: number; can_export: boolean };
-  expect(entBody.retention_days).toBe(365);
-  expect(entBody.can_export).toBe(true);
-  expect(entBody.activity_logs.length).toBe(2);
+  const response = await get(ws.app, '/api/v1/activity-log', ws.cookie);
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as {
+    activity_logs: Array<{ action: string }>;
+    retention_days: number;
+    can_export: boolean;
+  };
+  expect(body.retention_days).toBe(365);
+  expect(body.can_export).toBe(true);
+  expect(body.activity_logs.length).toBe(2);
 });
 
 test('filters activity logs by person and by type', async () => {
@@ -172,7 +172,7 @@ test('filters activity logs by person and by type', async () => {
   expect(siteBody.activity_logs[0].action).toBe('User updated site');
 });
 
-test('GET /api/v1/activity-log/export returns 403 on non-enterprise, CSV on enterprise', async () => {
+test('GET /api/v1/activity-log/export returns CSV for owner and admin, 403 for editor', async () => {
   const ws = await workspace(newApp());
 
   await prisma.auditLog.create({
@@ -184,23 +184,18 @@ test('GET /api/v1/activity-log/export returns 403 on non-enterprise, CSV on ente
     },
   });
 
-  // Free plan returns 403
-  const freeRes = await get(ws.app, '/api/v1/activity-log/export', ws.cookie);
-  expect(freeRes.status).toBe(403);
-
-  // Upgrade to enterprise
-  await prisma.workspaceBilling.upsert({
-    where: { organizationId: ws.organizationId },
-    update: { plan: 'enterprise' },
-    create: { organizationId: ws.organizationId, plan: 'enterprise' },
-  });
-
   const entRes = await get(ws.app, '/api/v1/activity-log/export', ws.cookie);
   expect(entRes.status).toBe(200);
   expect(entRes.headers.get('content-type')).toContain('text/csv');
   const text = await entRes.text();
   expect(text).toContain('When,Who,What');
   expect(text).toContain('Some change');
+
+  await prisma.member.updateMany({ where: { organizationId: ws.organizationId }, data: { role: 'admin' } });
+  expect((await get(ws.app, '/api/v1/activity-log/export', ws.cookie)).status).toBe(200);
+
+  await prisma.member.updateMany({ where: { organizationId: ws.organizationId }, data: { role: 'editor' } });
+  expect((await get(ws.app, '/api/v1/activity-log/export', ws.cookie)).status).toBe(403);
 });
 
 test('activity log cannot be modified or deleted via UI/API (immutability)', async () => {
