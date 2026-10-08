@@ -1,11 +1,7 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, beforeEach, expect, test } from 'bun:test';
-import { cleanDatabase } from '../../test/helpers';
+import { cleanDatabase, memoryStorage } from '../../test/helpers';
 import { getPrisma } from '../db';
-import { LocalDiskProvider } from '../storage/local';
-import type { StorageProvider } from '../storage/provider';
+import type { Storage } from '../storage/provider';
 import { sweepExpiredAssets } from './ttl';
 
 const prisma = getPrisma();
@@ -26,8 +22,6 @@ const createOrg = async () => {
 };
 
 type AssetOverrides = Partial<{
-  provider: string;
-  providerAccount: string;
   expiresAt: Date | null;
   deletedAt: Date | null;
   providerFileId: string;
@@ -39,8 +33,6 @@ const createAsset = async (organizationId: string, overrides: AssetOverrides = {
       publicId: crypto.randomUUID(),
       organizationId,
       kind: 'step',
-      provider: overrides.provider ?? 'fake',
-      providerAccount: overrides.providerAccount ?? 'local',
       providerFileId: overrides.providerFileId ?? crypto.randomUUID(),
       mime: 'image/png',
       bytes: 1,
@@ -59,8 +51,8 @@ test('deletes provider file then sets deletedAt in order', async () => {
   const asset = await createAsset(org.id);
   const calls: string[] = [];
 
-  const provider: StorageProvider = {
-    name: 'fake',
+  const provider: Storage = {
+    check: async () => {},
     upload: rejects,
     read: rejects,
     delete: async () => {
@@ -70,7 +62,7 @@ test('deletes provider file then sets deletedAt in order', async () => {
     },
   };
 
-  const result = await sweepExpiredAssets({ storage: { provider, accounts: ['local'] } });
+  const result = await sweepExpiredAssets({ storage: provider });
 
   expect(result).toEqual({ locked: true, deleted: 1, failed: 0 });
   expect(calls).toEqual(['delete']);
@@ -82,8 +74,8 @@ test('treats a not-found delete (crash recovery) as success', async () => {
   const org = await createOrg();
   const asset = await createAsset(org.id);
 
-  const provider: StorageProvider = {
-    name: 'fake',
+  const provider: Storage = {
+    check: async () => {},
     upload: rejects,
     read: rejects,
     delete: async () => {
@@ -93,7 +85,7 @@ test('treats a not-found delete (crash recovery) as success', async () => {
     },
   };
 
-  const result = await sweepExpiredAssets({ storage: { provider, accounts: ['local'] } });
+  const result = await sweepExpiredAssets({ storage: provider });
 
   expect(result).toEqual({ locked: true, deleted: 1, failed: 0 });
   const after = await prisma.asset.findUniqueOrThrow({ where: { id: asset.id } });
@@ -106,17 +98,17 @@ test('leaves deletedAt null and continues past a provider 5xx', async () => {
   const succeeding = await createAsset(org.id, { providerFileId: 'succeeding' });
   const logged: string[] = [];
 
-  const provider: StorageProvider = {
-    name: 'fake',
+  const provider: Storage = {
+    check: async () => {},
     upload: rejects,
     read: rejects,
-    delete: async (_account, fileId) => {
+    delete: async (fileId) => {
       if (fileId === 'failing') throw new Error('upstream 500');
     },
   };
 
   const result = await sweepExpiredAssets({
-    storage: { provider, accounts: ['local'] },
+    storage: provider,
     log: (message) => logged.push(message),
   });
 
@@ -140,8 +132,8 @@ test('holds the advisory lock for the sweep', async () => {
   });
 
   let reachedDelete = false;
-  const pausedProvider: StorageProvider = {
-    name: 'fake',
+  const pausedProvider: Storage = {
+    check: async () => {},
     upload: rejects,
     read: rejects,
     delete: async () => {
@@ -150,12 +142,12 @@ test('holds the advisory lock for the sweep', async () => {
     },
   };
 
-  const firstSweep = sweepExpiredAssets({ storage: { provider: pausedProvider, accounts: ['local'] } });
+  const firstSweep = sweepExpiredAssets({ storage: pausedProvider });
   // Wait until the first sweep holds the lock and is paused inside provider.delete.
   for (let i = 0; i < 200 && !reachedDelete; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   expect(reachedDelete).toBe(true);
 
-  const second = await sweepExpiredAssets({ storage: { provider: pausedProvider, accounts: ['local'] } });
+  const second = await sweepExpiredAssets({ storage: pausedProvider });
   expect(second).toEqual({ locked: false });
 
   releaseFirst();
@@ -167,14 +159,14 @@ test('does nothing when no asset is expired', async () => {
   const org = await createOrg();
   await createAsset(org.id, { expiresAt: new Date(Date.now() + 60_000) });
 
-  const provider: StorageProvider = {
-    name: 'fake',
+  const provider: Storage = {
+    check: async () => {},
     upload: rejects,
     read: rejects,
     delete: rejects,
   };
 
-  const result = await sweepExpiredAssets({ storage: { provider, accounts: ['local'] } });
+  const result = await sweepExpiredAssets({ storage: provider });
 
   expect(result).toEqual({ locked: true, deleted: 0, failed: 0 });
 });
@@ -184,8 +176,8 @@ test('stops at the time budget and leaves the rest for the next sweep', async ()
   await createAsset(org.id);
   await createAsset(org.id);
 
-  const slowProvider: StorageProvider = {
-    name: 'fake',
+  const slowProvider: Storage = {
+    check: async () => {},
     upload: rejects,
     read: rejects,
     delete: async () => {
@@ -194,44 +186,23 @@ test('stops at the time budget and leaves the rest for the next sweep', async ()
   };
 
   const result = await sweepExpiredAssets({
-    storage: { provider: slowProvider, accounts: ['local'] },
+    storage: slowProvider,
     budgetMs: 10,
   });
 
   expect(result).toEqual({ locked: true, deleted: 1, failed: 0 });
 });
 
-test('deletes an asset recorded against "local" even while STORAGE_PROVIDER=s3', async () => {
-  // No storage override: the sweep must resolve the provider itself, per asset.
-  const previous = {
-    STORAGE_PROVIDER: process.env.STORAGE_PROVIDER,
-    LOCAL_STORAGE_DIR: process.env.LOCAL_STORAGE_DIR,
-  };
-  const root = await mkdtemp(join(tmpdir(), 'od-ttl-local-'));
+test('removes the stored object for an expired asset', async () => {
+  const storage = memoryStorage();
+  const { fileId } = await storage.upload(new Uint8Array([1, 2, 3]), 'image/png');
+  const org = await createOrg();
+  const asset = await createAsset(org.id, { providerFileId: fileId });
 
-  try {
-    process.env.LOCAL_STORAGE_DIR = root;
-    const disk = new LocalDiskProvider(root);
-    const { fileId } = await disk.upload('local', 'key', new Uint8Array([1, 2, 3]));
+  const result = await sweepExpiredAssets({ storage });
 
-    const org = await createOrg();
-    const asset = await createAsset(org.id, { provider: 'local', providerAccount: 'local', providerFileId: fileId });
-
-    // Deployment default is s3 with no S3 credentials set, so a fallback to
-    // STORAGE_PROVIDER would throw resolving the s3 factory, not just read the
-    // wrong bytes.
-    process.env.STORAGE_PROVIDER = 's3';
-
-    const result = await sweepExpiredAssets();
-
-    expect(result).toEqual({ locked: true, deleted: 1, failed: 0 });
-    const after = await prisma.asset.findUniqueOrThrow({ where: { id: asset.id } });
-    expect(after.deletedAt).not.toBeNull();
-    await expect(disk.read('local', fileId)).rejects.toBeTruthy();
-  } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key as keyof typeof previous];
-      else process.env[key as keyof typeof previous] = value;
-    }
-  }
+  expect(result).toEqual({ locked: true, deleted: 1, failed: 0 });
+  expect(storage.objects.has(fileId)).toBe(false);
+  const after = await prisma.asset.findUniqueOrThrow({ where: { id: asset.id } });
+  expect(after.deletedAt).not.toBeNull();
 });
