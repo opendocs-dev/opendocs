@@ -5,18 +5,24 @@ import { getSession } from '@/lib/server-api';
 
 import { SignInButton } from './sign-in-button';
 
-import '../dashboard/admin.css';
+import '../admin/admin.css';
 
 export const metadata = { title: 'Sign in — OpenDocs' };
+
+/** Only same-site paths under /admin are honoured, so `next` can never become an open redirect. */
+function safeNext(raw: string | undefined): string {
+  return raw && /^\/admin(\/|\?|#|$)/.test(raw) && !raw.includes('//') ? raw : '/admin';
+}
 
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; next?: string }>;
 }) {
   const [session, params] = await Promise.all([getSession(), searchParams]);
+  const next = safeNext(params.next);
 
-  if (session) redirect('/dashboard');
+  if (session) redirect(next);
 
   return (
     <div className="adm adm-auth">
@@ -31,11 +37,13 @@ export default async function SignInPage({
           <p className="sub">Already have an account? Continue with the same GitHub login.</p>
           {params.error ? (
             <p role="alert" className="callout bad">
-              Sign-in was cancelled
+              {params.error === 'signup_closed'
+                ? 'Sign-up is closed on this instance'
+                : 'Sign-in was cancelled'}
             </p>
           ) : null}
           <div className="adm-auth-actions">
-            <SignInButton />
+            <SignInButton next={next} />
           </div>
         </div>
       </main>
