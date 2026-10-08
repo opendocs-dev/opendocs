@@ -1,18 +1,15 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import {
   BASE_URL,
   cleanDatabase,
-  OTHER_GITHUB_ACCOUNT,
+  memoryStorage,
   realFetch,
   signIn,
   type App,
 } from '../../test/helpers';
 import { getPrisma } from '../db';
 import { createApp } from '../index';
-import { LocalDiskProvider } from '../storage/local';
+import { getInstanceOrg } from '../instance-org';
 
 const prisma = getPrisma();
 
@@ -23,20 +20,12 @@ type Workspace = {
   organizationId: string;
 };
 
-const newApp = async (): Promise<App> => {
-  const root = await mkdtemp(join(tmpdir(), 'od-cats-'));
-  return createApp(async () => {}, {
-    provider: new LocalDiskProvider(root),
-    accounts: ['local'],
-  });
-};
+const newApp = async (): Promise<App> => createApp(async () => {}, memoryStorage());
 
 const workspace = async (app: App, account: Parameters<typeof signIn>[1] = {}): Promise<Workspace> => {
   const cookie = await signIn(app, account);
 
-  const current = await app.handle(new Request(`${BASE_URL}/api/auth/get-session`, { headers: { cookie } }));
-  const organizationId = ((await current.json()) as { session: { activeOrganizationId: string } }).session
-    .activeOrganizationId;
+  const organizationId = (await getInstanceOrg()).id;
 
   const created = await app.handle(
     new Request(`${BASE_URL}/api/auth/api-key/create`, {
@@ -340,32 +329,6 @@ test('PATCH /api/v1/categories/:id accepts status "active"', async () => {
   expect(body.status).toBe('active');
 });
 
-test('PATCH /api/v1/categories/:id from other workspace returns 404', async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-
-  const category = await prisma.category.create({
-    data: {
-      organizationId: owner.organizationId,
-      slug: 'whatsapp',
-      name: 'WhatsApp',
-      source: 'user',
-      status: 'active',
-    },
-  });
-
-  const response = await other.app.handle(
-    new Request(`${BASE_URL}/api/v1/categories/${category.id}`, {
-      method: 'PATCH',
-      headers: { cookie: other.cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Hacked' }),
-    }),
-  );
-
-  expect(response.status).toBe(404);
-});
-
 test('DELETE /api/v1/categories/:id removes it', async () => {
   const ws = await workspace(await newApp());
 
@@ -525,40 +488,6 @@ test('PUT /api/v1/flows/:publicId/category with null clears category', async () 
   expect(flowAfter.categoryId).toBeNull();
 });
 
-test('PUT /api/v1/flows/:publicId/category from other workspace returns 404', async () => {
-  const app = await newApp();
-  const owner = await workspace(app);
-  const other = await workspace(app, OTHER_GITHUB_ACCOUNT);
-
-  const flow = await prisma.flow.create({
-    data: {
-      publicId: 'flow-123',
-      organizationId: owner.organizationId,
-      title: 'My Flow',
-    },
-  });
-
-  const category = await prisma.category.create({
-    data: {
-      organizationId: other.organizationId,
-      slug: 'whatsapp',
-      name: 'WhatsApp',
-      source: 'user',
-      status: 'active',
-    },
-  });
-
-  const response = await other.app.handle(
-    new Request(`${BASE_URL}/api/v1/flows/${flow.publicId}/category`, {
-      method: 'PUT',
-      headers: { cookie: other.cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ category_id: category.id }),
-    }),
-  );
-
-  expect(response.status).toBe(404);
-});
-
 test('PUT /api/v1/site/category-policy sets policy to auto', async () => {
   const ws = await workspace(await newApp());
 
@@ -574,7 +503,7 @@ test('PUT /api/v1/site/category-policy sets policy to auto', async () => {
   const body = (await response.json()) as { policy: string };
   expect(body.policy).toBe('auto');
 
-  const site = await prisma.workspaceSite.findUniqueOrThrow({
+  const site = await prisma.siteSettings.findUniqueOrThrow({
     where: { organizationId: ws.organizationId },
   });
   expect(site.categoryPolicy).toBe('auto');
@@ -582,7 +511,7 @@ test('PUT /api/v1/site/category-policy sets policy to auto', async () => {
 
 test('PUT /api/v1/site/category-policy sets policy to suggest', async () => {
   const ws = await workspace(await newApp());
-  await prisma.workspaceSite.create({
+  await prisma.siteSettings.create({
     data: { organizationId: ws.organizationId, siteTitle: 'Site', categoryPolicy: 'auto' },
   });
 
@@ -596,7 +525,7 @@ test('PUT /api/v1/site/category-policy sets policy to suggest', async () => {
 
   expect(response.status).toBe(200);
 
-  const site = await prisma.workspaceSite.findUniqueOrThrow({
+  const site = await prisma.siteSettings.findUniqueOrThrow({
     where: { organizationId: ws.organizationId },
   });
   expect(site.categoryPolicy).toBe('suggest');
