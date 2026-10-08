@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import type { GetDocResponse } from '@opendocs/core';
@@ -102,11 +101,6 @@ export default async function DocPage({ params }: { params: Promise<PageParams> 
             Make a guide like this
           </a>
         </footer>
-        {doc.is_free_plan && (
-          <p className="doc-footer muted">
-            Made with <Link href="/">OpenDocs</Link>
-          </p>
-        )}
       </main>
     </div>
   );
