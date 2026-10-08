@@ -1,0 +1,16 @@
+node_modules
+
+# Next.js build output
+/.next/
+/out/
+
+# Next.js generated types
+next-env.d.ts
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Keep environment variables out of version control
+.env
+.env.*
+!.env.example

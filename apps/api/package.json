@@ -1,0 +1,29 @@
+{
+  "name": "@opendocs-cloud/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "typecheck": "prisma generate && tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:deploy:test": "DATABASE_URL=postgresql://opendocs:opendocs@localhost:55432/opendocs_test prisma migrate deploy"
+  },
+  "dependencies": {
+    "@better-auth/api-key": "^1.7.6",
+    "@googleapis/drive": "^26.0.1",
+    "@opendocs/core": "workspace:*",
+    "@polar-sh/sdk": "0.49.0",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "^7.10.0",
+    "better-auth": "^1.7.6",
+    "elysia": "^1.4.30",
+    "prisma": "7.10.0"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "0.34.52",
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
+  }
+}
