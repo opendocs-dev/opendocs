@@ -30,7 +30,7 @@ test('off by default returns 404', async () => {
     const app = createApp(async () => {});
     const token = makeValidToken();
     const response = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}`),
+      new Request(`${BASE_URL}/api/test/login`, { headers: { 'x-e2e-token': token } }),
     );
     expect(response.status).toBe(404);
     const body = (await response.json()) as { error: { code: string; message: string } };
@@ -61,14 +61,14 @@ test('wrong token returns 404', async () => {
 
     // Wrong token of different length
     const resDiffLen = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${makeShortToken()}`),
+      new Request(`${BASE_URL}/api/test/login`, { headers: { 'x-e2e-token': makeShortToken() } }),
     );
     expect(resDiffLen.status).toBe(404);
 
     // Wrong token of same length
     const wrongSameLen = 'x'.repeat(token.length);
     const resSameLen = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${wrongSameLen}`),
+      new Request(`${BASE_URL}/api/test/login`, { headers: { 'x-e2e-token': wrongSameLen } }),
     );
     expect(resSameLen.status).toBe(404);
   } finally {
@@ -97,6 +97,44 @@ test('refuses to boot in production', () => {
     else delete process.env.E2E_LOGIN_TOKEN;
     if (origNodeEnv !== undefined) process.env.NODE_ENV = origNodeEnv;
     else delete process.env.NODE_ENV;
+  }
+});
+
+test('refuses to boot unless NODE_ENV is test or development', () => {
+  const orig = { e: process.env.E2E_LOGIN_ENABLED, t: process.env.E2E_LOGIN_TOKEN, n: process.env.NODE_ENV };
+  process.env.E2E_LOGIN_ENABLED = 'true';
+  process.env.E2E_LOGIN_TOKEN = makeValidToken();
+  try {
+    for (const value of ['staging', '']) {
+      process.env.NODE_ENV = value;
+      expect(() => createApp(async () => {})).toThrow();
+    }
+    delete process.env.NODE_ENV;
+    expect(() => createApp(async () => {})).toThrow();
+  } finally {
+    if (orig.e !== undefined) process.env.E2E_LOGIN_ENABLED = orig.e;
+    else delete process.env.E2E_LOGIN_ENABLED;
+    if (orig.t !== undefined) process.env.E2E_LOGIN_TOKEN = orig.t;
+    else delete process.env.E2E_LOGIN_TOKEN;
+    if (orig.n !== undefined) process.env.NODE_ENV = orig.n;
+    else delete process.env.NODE_ENV;
+  }
+});
+
+test('the token in the query string is not accepted', async () => {
+  const orig = { e: process.env.E2E_LOGIN_ENABLED, t: process.env.E2E_LOGIN_TOKEN };
+  const token = makeValidToken();
+  process.env.E2E_LOGIN_ENABLED = 'true';
+  process.env.E2E_LOGIN_TOKEN = token;
+  try {
+    const app = createApp(async () => {});
+    const response = await app.handle(new Request(`${BASE_URL}/api/test/login?token=${token}`));
+    expect(response.status).toBe(404);
+  } finally {
+    if (orig.e !== undefined) process.env.E2E_LOGIN_ENABLED = orig.e;
+    else delete process.env.E2E_LOGIN_ENABLED;
+    if (orig.t !== undefined) process.env.E2E_LOGIN_TOKEN = orig.t;
+    else delete process.env.E2E_LOGIN_TOKEN;
   }
 });
 
@@ -139,7 +177,7 @@ test('sets a session cookie and redirects', async () => {
   try {
     const app = createApp(async () => {});
     const res = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}`),
+      new Request(`${BASE_URL}/api/test/login`, { headers: { 'x-e2e-token': token } }),
     );
 
     expect(res.status).toBe(302);
@@ -190,13 +228,13 @@ test('reuses the same user', async () => {
 
     // First call
     const res1 = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}`),
+      new Request(`${BASE_URL}/api/test/login`, { headers: { 'x-e2e-token': token } }),
     );
     expect(res1.status).toBe(302);
 
     // Second call
     const res2 = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}`),
+      new Request(`${BASE_URL}/api/test/login`, { headers: { 'x-e2e-token': token } }),
     );
     expect(res2.status).toBe(302);
 
@@ -234,7 +272,7 @@ test('applies role', async () => {
 
     // Set role=editor
     const resEditor = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&role=editor`),
+      new Request(`${BASE_URL}/api/test/login?role=editor`, { headers: { 'x-e2e-token': token } }),
     );
     expect(resEditor.status).toBe(302);
 
@@ -248,14 +286,14 @@ test('applies role', async () => {
 
     // Set role=admin: applied after the session exists, so the sign-in role sync keeps it
     const resAdmin = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&role=admin`),
+      new Request(`${BASE_URL}/api/test/login?role=admin`, { headers: { 'x-e2e-token': token } }),
     );
     expect(resAdmin.status).toBe(302);
     expect((await prisma.member.findFirstOrThrow({ where: { userId: user.id } })).role).toBe('admin');
 
     // Invalid role -> 422
     const resBadRole = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&role=invalid`),
+      new Request(`${BASE_URL}/api/test/login?role=invalid`, { headers: { 'x-e2e-token': token } }),
     );
     expect(resBadRole.status).toBe(422);
     const badRoleBody = (await resBadRole.json()) as { error: { code: string } };
@@ -285,7 +323,7 @@ test('rejects bad next', async () => {
 
     // Missing leading slash
     const resNoSlash = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&next=dashboard`),
+      new Request(`${BASE_URL}/api/test/login?next=dashboard`, { headers: { 'x-e2e-token': token } }),
     );
     expect(resNoSlash.status).toBe(422);
     const bodyNoSlash = (await resNoSlash.json()) as { error: { code: string } };
@@ -293,7 +331,7 @@ test('rejects bad next', async () => {
 
     // Double leading slash (protocol-relative URL)
     const resDoubleSlash = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&next=//evil.com`),
+      new Request(`${BASE_URL}/api/test/login?next=//evil.com`, { headers: { 'x-e2e-token': token } }),
     );
     expect(resDoubleSlash.status).toBe(422);
     const bodyDoubleSlash = (await resDoubleSlash.json()) as { error: { code: string } };
@@ -301,7 +339,7 @@ test('rejects bad next', async () => {
 
     // Backslash
     const resBackslash = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&next=/dash\\board`),
+      new Request(`${BASE_URL}/api/test/login?next=/dash\\board`, { headers: { 'x-e2e-token': token } }),
     );
     expect(resBackslash.status).toBe(422);
     const bodyBackslash = (await resBackslash.json()) as { error: { code: string } };
@@ -309,7 +347,7 @@ test('rejects bad next', async () => {
 
     // Valid next -> 302 with Location
     const resValid = await app.handle(
-      new Request(`${BASE_URL}/api/test/login?token=${token}&next=/dashboard/site`),
+      new Request(`${BASE_URL}/api/test/login?next=/dashboard/site`, { headers: { 'x-e2e-token': token } }),
     );
     expect(resValid.status).toBe(302);
     expect(resValid.headers.get('location')).toBe('/dashboard/site');
