@@ -76,7 +76,9 @@ only; without `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` nobody can log in.
    Required: `PUBLIC_URL` (the URL users open, no path), `BETTER_AUTH_SECRET` (32+ characters,
    `openssl rand -hex 32`), `ADMIN_EMAILS` (comma list), `POSTGRES_PASSWORD`, the `S3_*` keys
    (`S3_SECRET_ACCESS_KEY` is also the MinIO password), and the GitHub pair below.
-   `PUBLIC_URL` is baked into the web image, so rebuild (`docker compose up -d --build`) after changing it.
+   Images are pulled from `ghcr.io/opendocs-dev/opendocs-{api,web}` at the tag in `OPENDOCS_VERSION`
+   (`.env.example` sets `edge`, the latest `main`; pin a release such as `1.0.0` for production).
+   `PUBLIC_URL` and the other settings are read at runtime: edit `.env` and `docker compose up -d` to apply.
 
 2. Create a GitHub OAuth app (GitHub, Settings, Developer settings, OAuth Apps). Set the callback URL to
    `${PUBLIC_URL}/api/auth/callback/github` and put the client id and secret in `GITHUB_CLIENT_ID` and
@@ -109,8 +111,15 @@ started, and set `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCE
 (R2 uses `auto`) and `S3_FORCE_PATH_STYLE` (`false` for AWS and R2). Create the bucket yourself.
 Set `ASSET_BASE_URL` to serve images from a CDN or public bucket instead of through the api.
 
-Upgrade: `git pull && docker compose up -d --build`. Migrations run on api start; data lives in the
+Upgrade: set the new `OPENDOCS_VERSION` in `.env` (not needed for `edge`), then
+`docker compose pull && docker compose up -d`. Migrations run on api start; data lives in the
 `pgdata` and `miniodata` volumes. The dev-only Postgres for tests is `docker-compose.dev.yml`.
+
+To build the images from this checkout instead of pulling them:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ## Build from source
 
